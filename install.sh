@@ -20,6 +20,9 @@ fi
 : "${IMAGE_NAME:=ghcr.io/nick0425-ops/v2bxx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}" # 僅當 INSTALL_TYPE=v2ray 時生效
 
+# 初始化額外參數，避免環境污染
+EXTRA_DOCKER_ARGS=""
+
 # 根據安裝類型設定環境參數
 case "$INSTALL_TYPE" in
     ss|shadowsocks)
@@ -27,14 +30,12 @@ case "$INSTALL_TYPE" in
         HOST_CONFIG_DIR="/etc/V2bX_SS"
         TARGET_NODE_TYPE="shadowsocks"
         DISPLAY_NAME="Shadowsocks"
-        EXTRA_DOCKER_ARGS=""
         ;;
     v2ray|vmess|vless)
         CONTAINER_NAME="v2bx-v2ray"
         HOST_CONFIG_DIR="/etc/V2bX_V2RAY"
         TARGET_NODE_TYPE="${V2RAY_PROTOCOL}"
         DISPLAY_NAME="V2Ray (${V2RAY_PROTOCOL})"
-        EXTRA_DOCKER_ARGS=""
         ;;
     hy2|hysteria2)
         CONTAINER_NAME="v2bx-hy2"
@@ -74,19 +75,42 @@ deploy_v2bx() {
         echo -e "\033[0;32m[Info] Docker 已安裝。\033[0m"
     fi
 
-    # 2. 系統優化：自動開啟 BBR + FQ
+    # 2. 系統優化：自動開啟 BBR + FQ (防重複寫入優化)
     echo -e "\033[0;32m[Info] 檢查 BBR 加速狀態...\033[0m"
-    if ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
-        echo -e "\033[0;33m[Warn] 檢測到未開啟 BBR，正在寫入優化配置...\033[0m"
-        cp /etc/sysctl.conf /etc/sysctl.conf.bak 2>/dev/null
-        sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-        sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-        echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
-        sysctl -p >/dev/null 2>&1
-        echo -e "\033[0;32m[Info] BBR + FQ 已開啟。\033[0m"
+    
+    # 檢查是否需要修改 sysctl.conf
+    NEED_SYSCTL_RELOAD=0
+
+    # 優化 qdisc
+    if grep -q "net.core.default_qdisc" /etc/sysctl.conf; then
+        # 如果存在，替換它
+        if ! grep -q "net.core.default_qdisc = fq" /etc/sysctl.conf; then
+            sed -i 's/^net.core.default_qdisc.*/net.core.default_qdisc = fq/' /etc/sysctl.conf
+            NEED_SYSCTL_RELOAD=1
+        fi
     else
-        echo -e "\033[0;32m[Info] BBR 已經開啟，跳過優化。\033[0m"
+        # 如果不存在，追加它
+        echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+        NEED_SYSCTL_RELOAD=1
+    fi
+
+    # 優化 congestion_control
+    if grep -q "net.ipv4.tcp_congestion_control" /etc/sysctl.conf; then
+        if ! grep -q "net.ipv4.tcp_congestion_control = bbr" /etc/sysctl.conf; then
+            sed -i 's/^net.ipv4.tcp_congestion_control.*/net.ipv4.tcp_congestion_control = bbr/' /etc/sysctl.conf
+            NEED_SYSCTL_RELOAD=1
+        fi
+    else
+        echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+        NEED_SYSCTL_RELOAD=1
+    fi
+
+    # 只有在修改了配置或當前未生效時才重載
+    if [[ $NEED_SYSCTL_RELOAD -eq 1 ]] || ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+        sysctl -p >/dev/null 2>&1
+        echo -e "\033[0;32m[Info] BBR + FQ 優化已應用。\033[0m"
+    else
+        echo -e "\033[0;32m[Info] BBR 已經開啟，無需變更。\033[0m"
     fi
 
     # 3. 設定檔生成 (寫入到對應的獨立目錄)
@@ -135,11 +159,15 @@ EOF
     # 4. 容器部署
     echo -e "\033[0;32m[Info] 正在拉取鏡像: ${IMAGE_NAME} ...\033[0m"
     
+    # 優化：先拉取鏡像，失敗則終止，避免刪除舊容器後無法啟動新容器
+    if ! docker pull $IMAGE_NAME; then
+        echo -e "\033[0;31m[Error] 鏡像拉取失敗，請檢查網絡連線。\033[0m"
+        exit 1
+    fi
+    
     # 停止舊容器
     docker stop $CONTAINER_NAME >/dev/null 2>&1
     docker rm $CONTAINER_NAME >/dev/null 2>&1
-    
-    docker pull $IMAGE_NAME
     
     # 啟動容器
     # --network host: 極致效能
