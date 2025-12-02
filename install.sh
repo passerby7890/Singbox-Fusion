@@ -134,6 +134,7 @@ deploy_v2bx() {
         COMMA=","
     done
 
+    # 【修復】將 NTP Server 改為 pool.ntp.org 以解決 i/o timeout 問題
     cat > ${HOST_CONFIG_DIR}/config.json <<EOF
 {
   "Log": { "Level": "error", "Output": "" },
@@ -141,7 +142,7 @@ deploy_v2bx() {
     {
       "Type": "sing", "Name": "sing1",
       "Log": { "Level": "error", "Timestamp": true },
-      "NTP": { "Enable": true, "Server": "time.apple.com", "ServerPort": 0 },
+      "NTP": { "Enable": true, "Server": "pool.ntp.org", "ServerPort": 123 },
       "OriginalPath": "/etc/V2bX/sing_origin.json"
     }
   ],
@@ -170,7 +171,7 @@ EOF
         -v ${HOST_CONFIG_DIR}:/etc/V2bX \
         $IMAGE_NAME
         
-    # 5. 狀態檢查 (修復版：移除強制版本檢查)
+    # 5. 狀態檢查
     if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
         echo -e "\033[0;32m[Success] V2bX [${DISPLAY_NAME}] 部署指令已下達！\033[0m"
         echo "------------------------------------------------"
