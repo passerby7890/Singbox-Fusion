@@ -27,7 +27,7 @@ export NODE_IDS="1,2"
 
 export INSTALL_TYPE="ss"   # 設定為 ss
 
-bash <(curl -Ls [https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/refs/heads/main/install.sh](https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/refs/heads/main/install.sh))
+bash <(curl -Ls [https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh](https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh))
 
 
 2️⃣ 安裝 V2Ray (VMess/VLESS)
@@ -42,7 +42,7 @@ export INSTALL_TYPE="v2ray"  # 設定為 v2ray
 
 export V2RAY_PROTOCOL="vmess" # (可選) vmess 或 vless，預設 vmess
 
-bash <(curl -Ls [https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/refs/heads/main/install.sh](https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/refs/heads/main/install.sh))
+bash <(curl -Ls [https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh](https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh))
 
 
 3️⃣ 安裝 Hysteria2
@@ -55,7 +55,7 @@ export NODE_IDS="5"
 
 export INSTALL_TYPE="hy2"    # 設定為 hy2
 
-bash <(curl -Ls [https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/refs/heads/main/install.sh](https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/refs/heads/main/install.sh))
+bash <(curl -Ls [https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh](https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh))
 
 
 📋 變數說明
@@ -151,3 +151,4 @@ docker restart v2bx-hy2
 docker stop v2bx-v2ray && docker rm v2bx-v2ray
 
 rm -rf /etc/V2bX_V2RAY
+
