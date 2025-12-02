@@ -9,16 +9,13 @@
 if [[ -z "$API_HOST" || -z "$API_KEY" || -z "$NODE_IDS" || -z "$INSTALL_TYPE" ]]; then
     echo -e "\033[0;31m[Error] 缺少必要變數！\033[0m"
     echo -e "請確保設定了以下變數："
-    echo -e "  - API_HOST"
-    echo -e "  - API_KEY"
-    echo -e "  - NODE_IDS"
-    echo -e "  - INSTALL_TYPE (ss | v2ray | hy2)"
+    echo -e "  - API_HOST, API_KEY, NODE_IDS, INSTALL_TYPE"
     exit 1
 fi
 
 # 設定預設變數
 : "${IMAGE_NAME:=ghcr.io/nick0425-ops/v2bxx:latest}"
-: "${V2RAY_PROTOCOL:=vmess}" # 僅當 INSTALL_TYPE=v2ray 時生效
+: "${V2RAY_PROTOCOL:=vmess}"
 
 # 初始化額外參數
 EXTRA_DOCKER_ARGS=""
@@ -42,12 +39,10 @@ case "$INSTALL_TYPE" in
         HOST_CONFIG_DIR="/etc/V2bX_HY2"
         TARGET_NODE_TYPE="hysteria2"
         DISPLAY_NAME="Hysteria2"
-        # Hy2 建議增加 NET_ADMIN 權限以優化 UDP
         EXTRA_DOCKER_ARGS="--cap-add=NET_ADMIN"
         ;;
     *)
         echo -e "\033[0;31m[Error] 未知的 INSTALL_TYPE: $INSTALL_TYPE\033[0m"
-        echo -e "請設定為: ss, v2ray, 或 hy2"
         exit 1
         ;;
 esac
@@ -55,31 +50,42 @@ esac
 deploy_v2bx() {
     echo -e "\033[0;32m[Info] 開始部署 V2bX [${DISPLAY_NAME}] 版...\033[0m"
     echo -e "面板地址: ${API_HOST}"
-    echo -e "節點 ID : ${NODE_IDS}"
+    echo -e "輸入 ID : ${NODE_IDS}"
     echo -e "容器名稱: ${CONTAINER_NAME}"
     echo -e "配置目錄: ${HOST_CONFIG_DIR}"
-    echo -e "使用鏡像: ${IMAGE_NAME}"
 
-    # 1. 環境檢查：安裝 Docker
+    # --- 1. 智能 ID 合併邏輯 ---
+    FINAL_NODE_IDS_LIST=""
+    
+    # 檢查是否已存在舊配置
+    if [ -f "${HOST_CONFIG_DIR}/config.json" ]; then
+        echo -e "\033[0;33m[Info] 檢測到舊配置文件，正在讀取舊節點 ID...\033[0m"
+        # 使用 grep 提取舊 ID
+        OLD_IDS=$(grep -oE '"NodeID":\s*[0-9]+' "${HOST_CONFIG_DIR}/config.json" | grep -oE '[0-9]+' | tr '\n' ',' | sed 's/,$//')
+        
+        if [ -n "$OLD_IDS" ]; then
+            echo -e "舊節點 ID: ${OLD_IDS}"
+            # 合併舊 ID 和新輸入的 ID (使用換行符分隔，排序，去重，再轉回逗號分隔)
+            COMBINED_IDS=$(echo "${OLD_IDS},${NODE_IDS}" | tr ',' '\n' | sort -n | uniq | tr '\n' ',' | sed 's/,$//')
+            FINAL_NODE_IDS_LIST="$COMBINED_IDS"
+            echo -e "\033[0;32m[Info] 合併後的節點 ID: ${FINAL_NODE_IDS_LIST}\033[0m"
+        else
+            FINAL_NODE_IDS_LIST="$NODE_IDS"
+        fi
+    else
+        FINAL_NODE_IDS_LIST="$NODE_IDS"
+    fi
+    # ---------------------------
+
+    # 2. 環境檢查 (Docker)
     if ! command -v docker &> /dev/null; then
         echo -e "\033[0;33m[Warn] 未檢測到 Docker，正在安裝...\033[0m"
-        if command -v apt-get &> /dev/null; then
-            apt-get update && apt-get install -y wget curl
-        elif command -v yum &> /dev/null; then
-            yum install -y wget curl
-        fi
         curl -fsSL https://get.docker.com | bash
-        systemctl enable docker
-        systemctl start docker
-    else
-        echo -e "\033[0;32m[Info] Docker 已安裝。\033[0m"
+        systemctl enable docker; systemctl start docker
     fi
 
-    # 2. 系統優化：自動開啟 BBR + FQ
-    echo -e "\033[0;32m[Info] 檢查 BBR 加速狀態...\033[0m"
-    
+    # 3. BBR 優化 (略過重複代碼，保持之前的優化邏輯)
     NEED_SYSCTL_RELOAD=0
-    # 優化 qdisc
     if grep -q "net.core.default_qdisc" /etc/sysctl.conf; then
         if ! grep -q "net.core.default_qdisc = fq" /etc/sysctl.conf; then
             sed -i 's/^net.core.default_qdisc.*/net.core.default_qdisc = fq/' /etc/sysctl.conf
@@ -89,8 +95,6 @@ deploy_v2bx() {
         echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
         NEED_SYSCTL_RELOAD=1
     fi
-
-    # 優化 congestion_control
     if grep -q "net.ipv4.tcp_congestion_control" /etc/sysctl.conf; then
         if ! grep -q "net.ipv4.tcp_congestion_control = bbr" /etc/sysctl.conf; then
             sed -i 's/^net.ipv4.tcp_congestion_control.*/net.ipv4.tcp_congestion_control = bbr/' /etc/sysctl.conf
@@ -100,21 +104,16 @@ deploy_v2bx() {
         echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
         NEED_SYSCTL_RELOAD=1
     fi
-
     if [[ $NEED_SYSCTL_RELOAD -eq 1 ]] || ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
         sysctl -p >/dev/null 2>&1
-        echo -e "\033[0;32m[Info] BBR + FQ 優化已應用。\033[0m"
-    else
-        echo -e "\033[0;32m[Info] BBR 已經開啟，無需變更。\033[0m"
     fi
 
-    # 3. 設定檔生成
-    echo -e "\033[0;32m[Info] 正在生成 V2bX 配置文件...\033[0m"
+    # 4. 生成設定檔
     mkdir -p ${HOST_CONFIG_DIR}
     echo "{}" > ${HOST_CONFIG_DIR}/sing_origin.json
     
     NODES_JSON=""
-    IFS=',' read -ra ID_ARRAY <<< "$NODE_IDS"
+    IFS=',' read -ra ID_ARRAY <<< "$FINAL_NODE_IDS_LIST"
     COMMA=""
     for id in "${ID_ARRAY[@]}"; do
         clean_id=$(echo "$id" | tr -d '[:space:]')
@@ -134,7 +133,6 @@ deploy_v2bx() {
         COMMA=","
     done
 
-    # 【修復】將 NTP Server 改為 pool.ntp.org 以解決 i/o timeout 問題
     cat > ${HOST_CONFIG_DIR}/config.json <<EOF
 {
   "Log": { "Level": "error", "Output": "" },
@@ -150,11 +148,10 @@ deploy_v2bx() {
 }
 EOF
 
-    # 4. 容器部署
+    # 5. 容器部署
     echo -e "\033[0;32m[Info] 正在拉取鏡像: ${IMAGE_NAME} ...\033[0m"
-    
     if ! docker pull $IMAGE_NAME; then
-        echo -e "\033[0;31m[Error] 鏡像拉取失敗，請檢查網絡連線。\033[0m"
+        echo -e "\033[0;31m[Error] 鏡像拉取失敗。\033[0m"
         exit 1
     fi
     
@@ -171,18 +168,18 @@ EOF
         -v ${HOST_CONFIG_DIR}:/etc/V2bX \
         $IMAGE_NAME
         
-    # 5. 狀態檢查
-    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo -e "\033[0;32m[Success] V2bX [${DISPLAY_NAME}] 部署指令已下達！\033[0m"
-        echo "------------------------------------------------"
-        echo "配置目錄: ${HOST_CONFIG_DIR}"
-        echo "容器名稱: ${CONTAINER_NAME}"
-        echo -e "\033[0;33m注意：請使用以下指令查看運行日誌以確認啟動狀態：\033[0m"
-        echo "docker logs -f --tail 100 ${CONTAINER_NAME}"
-        echo "------------------------------------------------"
-    else
-        echo -e "\033[0;31m[Error] 啟動失敗，請檢查變數或日誌。\033[0m"
-    fi
+    # 6. 結果展示與日誌檢測
+    echo -e "\033[0;32m[Success] 部署指令已完成！\033[0m"
+    echo "------------------------------------------------"
+    echo "容器名稱: ${CONTAINER_NAME}"
+    echo -e "目前生效的 Node ID: \033[0;36m${FINAL_NODE_IDS_LIST}\033[0m"
+    echo "------------------------------------------------"
+    echo -e "\033[0;33m[Check] 正在獲取最後 10 行運行日誌...\033[0m"
+    echo "------------------------------------------------"
+    sleep 3 # 等待容器啟動
+    docker logs --tail 10 ${CONTAINER_NAME}
+    echo "------------------------------------------------"
+    echo -e "\033[0;32m如果上方日誌無 Error，則代表運行正常。\033[0m"
 }
 
 deploy_v2bx
