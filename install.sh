@@ -14,7 +14,7 @@ if [[ -z "$API_HOST" || -z "$API_KEY" || -z "$NODE_IDS" || -z "$INSTALL_TYPE" ]]
 fi
 
 # 設定預設變數
-: "${IMAGE_NAME:=ghcr.io/nick0425-ops/v2bxx:latest}"
+: "${IMAGE_NAME:=ghcr.io/passerby7890/v2bxx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}"
 
 # 初始化額外參數
@@ -214,7 +214,7 @@ diagnose_system() {
 # 主菜單
 clear
 echo -e "\${GREEN}================================================\${PLAIN}"
-echo -e "\${GREEN}       V2bX 融合怪管理面板 (Ultimate Pro)       \${PLAIN}"
+echo -e "\${GREEN}        V2bX 融合怪管理面板 (Ultimate Pro)        \${PLAIN}"
 echo -e "\${GREEN}================================================\${PLAIN}"
 echo -e " 狀態: SS:\$(check_status \$C_SS) | V2Ray:\$(check_status \$C_V2) | Hy2:\$(check_status \$C_HY)"
 echo -e "------------------------------------------------"
@@ -358,7 +358,8 @@ deploy_v2bx() {
   "Log": { "Level": "error", "Output": "" },
   "Cores": [
     {
-      "Type": "sing", "Name": "sing1",
+      "Type": "sing",
+      "Name": "sing1",
       "Log": { "Level": "error", "Timestamp": true },
       "NTP": { "Enable": true, "Server": "pool.ntp.org", "ServerPort": 123 },
       "OriginalPath": "/etc/V2bX/sing_origin.json"
@@ -410,5 +411,3 @@ EOF
 }
 
 deploy_v2bx
-
-
