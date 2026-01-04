@@ -25,10 +25,14 @@ Docker 进程守护与日志自动轮转 (Log Rotation)，防止日志撑爆硬�
 建议先将脚本下载到服务器本地，方便后续管理：
 
 bash
+
 wget -N https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh
 chmod +x install.sh
+
 第二步：配置并安装 (多场景示例)
+
 场景 1️⃣：安装 Shadowsocks 节点 (Site A)
+
 适用于第一个网站或第一组节点：
 
 bash
