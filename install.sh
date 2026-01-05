@@ -32,7 +32,9 @@ fi
 # 所有资源名称都基于 SITE_TAG 生成，确保绝对隔离
 CONTAINER_NAME="v2bxx-${SITE_TAG}"       # 容器名：v2bxx-hash234
 HOST_CONFIG_DIR="/etc/V2bX_${SITE_TAG}"  # 配置目录：/etc/V2bX_hash234
-IMAGE_NAME="tracermy/v2bx-wyx2685:latest"         # 官方稳定镜像
+
+# *** 核心修正：使用您指定的 Docker 镜像 ***
+IMAGE_NAME="tracermy/v2bx-wyx2685:latest"
 
 log_info "----------------------------------------------------"
 log_info "启动 V2bX 部署流程 (Site: ${SITE_TAG})"
@@ -132,8 +134,14 @@ if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
 fi
 
 # 6.2 拉取最新镜像
-log_info "拉取最新 V2bX 镜像..."
-docker pull ${IMAGE_NAME} > /dev/null 2>&1
+log_info "拉取最新 V2bX 镜像 (${IMAGE_NAME})..."
+# 移除重定向以便看到拉取进度和可能的错误
+docker pull ${IMAGE_NAME}
+
+if [ $? -ne 0 ]; then
+    log_err "镜像拉取失败！请检查网络或镜像名称。"
+    exit 1
+fi
 
 # 6.3 启动容器
 # 关键参数解析：
