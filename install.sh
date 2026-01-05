@@ -3,8 +3,9 @@
 # =================================================================
 #   V2bX Multi-Site Deployment Script (Isolation Mode)
 #   特性：支援多網站並存、Docker 隔離、Sing-box 核心修復
-#   新增功能：自動配置 GSO, BBR, Swap, Docker, 記憶體優化
-#   版本狀態：黃金備份版 + 系統增強 (Enhanced)
+#   包含優化：GSO, BBR, Swap, Docker 自動安裝
+#   修正紀錄：移除 NTP 校時功能 (解決 i/o timeout 報錯)
+#   版本狀態：黃金備份版 (Final Stable)
 # =================================================================
 
 # 0. 變數檢查 (確保外部變數已輸入)
@@ -187,6 +188,7 @@ deploy_v2bx() {
     system_optimization
     
     # 2. 生成 Config (強制使用 sing 核心)
+    # [修正] 移除了 NTP 區塊，解決 UDP 連線超時問題
     mkdir -p ${HOST_CONFIG_DIR}
     echo "{}" > ${HOST_CONFIG_DIR}/sing_origin.json
     
@@ -218,7 +220,6 @@ deploy_v2bx() {
     {
       "Type": "sing", "Name": "sing1",
       "Log": { "Level": "error", "Timestamp": true },
-      "NTP": { "Enable": true, "Server": "pool.ntp.org", "ServerPort": 123 },
       "OriginalPath": "/etc/V2bX/sing_origin.json"
     }
   ],
