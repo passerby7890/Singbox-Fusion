@@ -3,6 +3,8 @@
 # =================================================================
 #   V2bX Multi-Site Deployment Script (Isolation Mode)
 #   特性：支援多網站並存、Docker 隔離、Sing-box 核心修復
+#   新增功能：自動配置 GSO, BBR, Swap, Docker, 記憶體優化
+#   版本狀態：黃金備份版 + 系統增強 (Enhanced)
 # =================================================================
 
 # 0. 變數檢查 (確保外部變數已輸入)
@@ -49,12 +51,59 @@ case "$INSTALL_TYPE" in
         ;;
 esac
 
-# --- [模組] 配置系統穩定性參數 (全域優化，只需執行一次) ---
-configure_stability() {
-    echo -e "\033[0;32m[Info] 正在檢查系統優化參數...\033[0m"
-    if ! grep -q "vm.swappiness" /etc/sysctl.conf; then
-        echo "vm.swappiness = 60" >> /etc/sysctl.conf
+# --- [模組] 系統全方位優化 (GSO, BBR, Swap, Docker) ---
+system_optimization() {
+    echo -e "\033[0;32m[Info] 正在執行系統全方位優化...\033[0m"
+
+    # 1. 安裝基礎工具
+    if [ -x "$(command -v apt-get)" ]; then
+        apt-get update -y >/dev/null 2>&1
+        apt-get install -y curl wget ethtool >/dev/null 2>&1
+    elif [ -x "$(command -v yum)" ]; then
+        yum install -y curl wget ethtool >/dev/null 2>&1
+    fi
+
+    # 2. 開啟 BBR 與 網路優化
+    if ! grep -q "net.ipv4.tcp_congestion_control = bbr" /etc/sysctl.conf; then
+        echo -e "\033[0;33m[Opt] 開啟 BBR...\033[0m"
+        echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_notsent_lowat = 16384" >> /etc/sysctl.conf
         sysctl -p >/dev/null 2>&1
+    fi
+
+    # 3. 記憶體與 Swap 優化
+    # 建立 2G Swap (如果不存在)
+    if [ $(free -m | grep Swap | awk '{print $2}') -eq 0 ]; then
+        echo -e "\033[0;33m[Opt] 檢測到無 Swap，正在建立 2GB Swap...\033[0m"
+        fallocate -l 2G /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo "/swapfile none swap sw 0 0" >> /etc/fstab
+    fi
+    # 調整記憶體參數 (傾向使用實體記憶體，減少 Swap 頻率，但保留快取)
+    if ! grep -q "vm.swappiness" /etc/sysctl.conf; then
+        echo "vm.swappiness = 10" >> /etc/sysctl.conf
+        echo "vm.vfs_cache_pressure = 50" >> /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+    fi
+
+    # 4. GSO (Generic Segmentation Offload) 網卡優化
+    DEFAULT_NIC=$(ip route show | grep default | awk '{print $5}' | head -n1)
+    if [ -n "$DEFAULT_NIC" ]; then
+        echo -e "\033[0;33m[Opt] 正在對網卡 $DEFAULT_NIC 開啟 GSO/GRO 優化...\033[0m"
+        ethtool -K "$DEFAULT_NIC" gso on gro on tso on >/dev/null 2>&1 || true
+    fi
+
+    # 5. Docker 安裝檢查
+    if ! command -v docker &> /dev/null; then
+        echo -e "\033[0;33m[Info] 正在安裝 Docker...\033[0m"
+        curl -fsSL https://get.docker.com | bash
+        systemctl enable docker
+        systemctl start docker
+    else
+        echo -e "\033[0;32m[Check] Docker 已安裝\033[0m"
     fi
 }
 
@@ -134,15 +183,9 @@ deploy_v2bx() {
     echo -e "容器標識: ${CONTAINER_NAME}"
     echo -e "配置路徑: ${HOST_CONFIG_DIR}"
     
-    # 1. 系統優化
-    configure_stability
+    # 1. 執行系統優化 (包含 Docker 安裝)
+    system_optimization
     
-    if ! command -v docker &> /dev/null; then
-        echo -e "\033[0;33m[Warn] 安裝 Docker...\033[0m"
-        curl -fsSL https://get.docker.com | bash
-        systemctl enable docker; systemctl start docker
-    fi
-
     # 2. 生成 Config (強制使用 sing 核心)
     mkdir -p ${HOST_CONFIG_DIR}
     echo "{}" > ${HOST_CONFIG_DIR}/sing_origin.json
@@ -191,6 +234,7 @@ EOF
     docker stop $CONTAINER_NAME >/dev/null 2>&1
     docker rm $CONTAINER_NAME >/dev/null 2>&1
     
+    # [備註] 若遇到 TLS handshake timeout，請在下方加入 --dns 8.8.8.8 --add-host 域名:IP
     docker run -d \
         --name $CONTAINER_NAME \
         --restart always \
