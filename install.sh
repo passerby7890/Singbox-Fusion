@@ -3,9 +3,8 @@
 # =================================================================
 #   V2bX Multi-Site Deployment Script (Isolation Mode)
 #   特性：支援多網站並存、Docker 隔離、Sing-box 核心修復
-#   包含優化：GSO, BBR, Swap, Docker 自動安裝
-#   修正紀錄：移除 NTP 校時功能 (解決 i/o timeout 報錯)
-#   版本狀態：黃金備份版 (Final Stable)
+#   新增功能：自動配置 GSO, BBR, Swap, Docker, 記憶體優化
+#   鏡像源：tinyserve/v2bx:latest (持續更新版)
 # =================================================================
 
 # 0. 變數檢查 (確保外部變數已輸入)
@@ -18,8 +17,8 @@ if [[ -z "$API_HOST" || -z "$API_KEY" || -z "$NODE_IDS" || -z "$INSTALL_TYPE" ||
 fi
 
 # 1. 定義隔離與核心變數
-# 使用 tracermy/v2bx-wyx2685 以確保 Sing-box 核心功能正常 (修復 unknown core type 錯誤)
-: "${IMAGE_NAME:=tracermy/v2bx-wyx2685:latest}"
+# 使用 tinyserve/v2bx:latest (用戶指定持續更新版)
+: "${IMAGE_NAME:=tinyserve/v2bx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}"
 
 # 根據 SITE_TAG 生成唯一的容器名與路徑
@@ -188,7 +187,6 @@ deploy_v2bx() {
     system_optimization
     
     # 2. 生成 Config (強制使用 sing 核心)
-    # [修正] 移除了 NTP 區塊，解決 UDP 連線超時問題
     mkdir -p ${HOST_CONFIG_DIR}
     echo "{}" > ${HOST_CONFIG_DIR}/sing_origin.json
     
@@ -198,7 +196,7 @@ deploy_v2bx() {
     for id in "${ID_ARRAY[@]}"; do
         clean_id=$(echo "$id" | tr -d '[:space:]')
         [ -z "$clean_id" ] && continue
-        # 這裡強制 Core: sing，配合 wyx2685/tracermy 鏡像
+        # 這裡強制 Core: sing，配合 tinyserve/v2bx 鏡像
         NODES_JSON="${NODES_JSON}${COMMA}
         {
             \"Name\": \"${SITE_TAG}_${INSTALL_TYPE}_${clean_id}\",
@@ -220,6 +218,7 @@ deploy_v2bx() {
     {
       "Type": "sing", "Name": "sing1",
       "Log": { "Level": "error", "Timestamp": true },
+      "NTP": { "Enable": true, "Server": "pool.ntp.org", "ServerPort": 123 },
       "OriginalPath": "/etc/V2bX/sing_origin.json"
     }
   ],
