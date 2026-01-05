@@ -14,7 +14,7 @@ if [[ -z "$API_HOST" || -z "$API_KEY" || -z "$NODE_IDS" || -z "$INSTALL_TYPE" ]]
 fi
 
 # 設定預設變數
-: "${IMAGE_NAME:=ghcr.io/nick0425-ops/v2bxx:latest}"
+: "${IMAGE_NAME:=ghcr.io/passerby7890/v2bxx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}"
 
 # 初始化額外參數 (默認為空)
