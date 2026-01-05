@@ -2,18 +2,21 @@
 
 # =================================================================
 #  V2bX Multi-Instance Deploy Script (Google SRE Standard)
-#  Version: 3.6 (Integrated Query Feature)
-#  Usage: 
-#    Install: bash install.sh
-#    Query:   bash install.sh list
+#  版本: 3.8 (Senior Reviewed - 简体中文最终版)
+#  审查优化: 
+#    1. 全局启用 NET_ADMIN 权限以确保 GSO/TProxy 完美运行
+#    2. 增加自动清理旧镜像逻辑，防止磁盘占满
+#    3. 强制关闭 Mux/TFO 以实现 [稳如老狗] 策略
+#  用法: 
+#    安装/更新: bash install.sh
+#    查询状态:  bash install.sh list
 # =================================================================
 
 # --- [Feature] 实例查询功能 (List Mode) ---
-# 放在最前面，确保不需要环境变量也能运行
 if [[ "$1" == "list" ]]; then
     echo -e "\033[0;34m[INFO] 正在扫描本机已安装的 V2bX 实例...\033[0m"
     echo "==================================================================="
-    printf "\033[1;33m%-15s %-25s %-15s %-10s\033[0m\n" "SITE_TAG" "容器名称" "运行状态" "管理指令"
+    printf "\033[1;33m%-15s %-25s %-15s %-10s\033[0m\n" "标签(TAG)" "容器名称" "运行状态" "管理指令"
     echo "-------------------------------------------------------------------"
 
     # 1. 扫描多开标签 (v2bx_*)
@@ -25,7 +28,6 @@ if [[ "$1" == "list" ]]; then
         TAG_NAME=$(basename "$file" | sed 's/v2bx_//')
         
         # 尝试模糊匹配容器 (匹配 v2bx-ss-TAG, v2bx-v2ray-TAG 等)
-        # 逻辑：查找名字以 TAG 结尾的容器
         CONTAINER_NAME=$(docker ps -a --format "{{.Names}}" | grep -E "\-${TAG_NAME}$" | head -n 1)
         
         if [ -n "$CONTAINER_NAME" ]; then
@@ -46,7 +48,6 @@ if [[ "$1" == "list" ]]; then
     # 2. 扫描默认实例 (v2bx)
     if [ -f "/usr/bin/v2bx" ]; then
         FOUND_ANY=1
-        # 默认容器名通常不带后缀
         CONTAINER_NAME=$(docker ps -a --format "{{.Names}}" | grep -E "^v2bx-(ss|v2ray|hy2|vmess)$" | head -n 1)
         
         if [ -n "$CONTAINER_NAME" ]; then
@@ -102,7 +103,8 @@ fi
 # 默认参数
 : "${IMAGE_NAME:=ghcr.io/passerby7890/v2bxx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}"
-EXTRA_DOCKER_ARGS=""
+# [Review Fix] 默认添加 NET_ADMIN，无论什么协议，确保内核级网络操作无权限问题
+EXTRA_DOCKER_ARGS="--cap-add=NET_ADMIN"
 
 # 路径定义
 case "$INSTALL_TYPE" in
@@ -120,7 +122,6 @@ case "$INSTALL_TYPE" in
         CONTAINER_NAME="v2bx-hy2${SUFFIX_NAME}"
         HOST_CONFIG_DIR="/etc/V2bX_HY2${SUFFIX_DIR}"
         TARGET_NODE_TYPE="hysteria2"
-        EXTRA_DOCKER_ARGS="--cap-add=NET_ADMIN"
         ;;
     *)
         echo -e "\033[0;31m[ERROR] 未知的类型: $INSTALL_TYPE\033[0m"
@@ -175,7 +176,7 @@ configure_system_global() {
         fi
     done
     if [ $NEED_RELOAD -eq 1 ]; then
-        sysctl -p >/dev/null 2>&1
+        sysctl -p >/dev/null 2>&1 || echo -e "\033[0;33m[WARN] sysctl reload failed, but config updated.\033[0m"
         echo -e "\033[0;32m[SYSTEM] 内核参数已校准并重载。\033[0m"
     fi
 }
@@ -242,18 +243,23 @@ IMG="${IMAGE_NAME}"
 CONF_DIR="${HOST_CONFIG_DIR}"
 
 case "\$1" in
-    start)   docker start \$C_NAME ;;
-    stop)    docker stop \$C_NAME ;;
-    restart) docker restart \$C_NAME ;;
-    logs)    docker logs -f --tail 100 \$C_NAME ;;
+    start)    docker start \$C_NAME ;;
+    stop)     docker stop \$C_NAME ;;
+    restart)  docker restart \$C_NAME ;;
+    logs)     docker logs -f --tail 100 \$C_NAME ;;
     update)
+        echo "Updating \$C_NAME ..."
         docker pull \$IMG
         docker stop \$C_NAME
         docker rm \$C_NAME
-        docker run -d --name \$C_NAME --restart always --network host --cap-add=SYS_TIME \\
+        # [Review Fix] 增加 NET_ADMIN 权限，增加时区挂载
+        docker run -d --name \$C_NAME --restart always --network host --cap-add=SYS_TIME --cap-add=NET_ADMIN \\
             --ulimit nofile=65535:65535 --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \\
             -e GOGC=50 ${EXTRA_DOCKER_ARGS} \\
-            -v \$CONF_DIR:/etc/V2bX -v /etc/localtime:/etc/localtime:ro \$IMG
+            -v \$CONF_DIR:/etc/V2bX -v /etc/localtime:/etc/localtime:ro -v /etc/timezone:/etc/timezone:ro \$IMG
+        
+        # [Review Fix] 更新后自动清理旧镜像
+        docker image prune -f
         ;;
     *) echo "Usage: ${SHORTCUT_NAME} {start|stop|restart|logs|update}" ;;
 esac
@@ -287,6 +293,10 @@ deploy() {
         clean_id=$(echo "$id" | tr -d '[:space:]')
         [ -z "$clean_id" ] && continue
         
+        # [Stable Fix] 稳如老狗配置核心区
+        # 1. EnableGSO=true: 唯一的优化
+        # 2. EnableTFO=false: 防止公司内网连不上
+        # 3. Multiplex=false: 防止断流和游戏卡顿
         NODES_JSON="${NODES_JSON}${COMMA}
         {
             \"Name\": \"${SITE_TAG}_${INSTALL_TYPE}_${clean_id}\",
@@ -295,8 +305,9 @@ deploy() {
             \"NodeID\": ${clean_id}, \"NodeType\": \"${TARGET_NODE_TYPE}\",
             \"Timeout\": 30, \"ListenIP\": \"0.0.0.0\", \"SendIP\": \"0.0.0.0\",
             \"DeviceOnlineMinTraffic\": 100, \"EnableProxyProtocol\": true,
-            \"EnableTFO\": true,
-            \"MultiplexConfig\": { \"Enable\": true, \"Padding\": true }
+            \"EnableTFO\": false,
+            \"EnableGSO\": true,
+            \"MultiplexConfig\": { \"Enable\": false, \"Padding\": false }
         }"
         COMMA=","
     done
@@ -322,22 +333,29 @@ EOF
     docker stop $CONTAINER_NAME >/dev/null 2>&1
     docker rm $CONTAINER_NAME >/dev/null 2>&1
     
+    # [Review Fix] 部署时也加入完整的挂载和权限
     docker run -d \
         --name $CONTAINER_NAME \
         --restart always \
         --network host \
         --cap-add=SYS_TIME \
+        --cap-add=NET_ADMIN \
         --ulimit nofile=65535:65535 \
         --log-driver json-file \
         --log-opt max-size=10m --log-opt max-file=3 \
+        # [Stable Fix] GOGC=50 保持低内存占用，适合长时间运行
         -e GOGC=50 \
         $EXTRA_DOCKER_ARGS \
         -v ${HOST_CONFIG_DIR}:/etc/V2bX \
         -v /etc/localtime:/etc/localtime:ro \
+        -v /etc/timezone:/etc/timezone:ro \
         $IMAGE_NAME >/dev/null
 
     install_shortcut
     
+    # [Review Fix] 部署完成后，清理此次拉取产生的旧层（如果存在）
+    docker image prune -f >/dev/null 2>&1
+
     echo -e "\033[0;33m[CHECK] 启动后健康检查 (5秒)...\033[0m"
     sleep 5
     
@@ -353,8 +371,9 @@ EOF
     elif echo "$LOG_CHECK" | grep -qiE "error|panic|fatal"; then
          echo -e "\033[0;31m[WARNING] 检测到 Error，请手动检查：${SHORTCUT_NAME} logs\033[0m"
     else
-        echo -e "\033[0;32m[SUCCESS] 部署成功！所有 SRE 检查项目已通过。\033[0m"
+        echo -e "\033[0;32m[SUCCESS] 部署成功！当前配置策略：[稳如老狗]\033[0m"
         echo -e "实例名称: ${CONTAINER_NAME}"
+        echo -e "优化状态: GSO[开] TFO[关] Mux[关] Cleaner[开]"
         echo -e "管理指令: \033[0;33m${SHORTCUT_NAME} logs\033[0m"
     fi
 }
