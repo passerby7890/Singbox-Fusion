@@ -36,7 +36,7 @@ SITE_TAG=${SITE_TAG:-"default"}
 # 定义基于 TAG 的动态变量
 CONTAINER_NAME="v2bxx-${SITE_TAG}"    # 容器名：v2bxx-hash234
 HOST_CONFIG_PATH="/etc/V2bX_${SITE_TAG}"  # 配置目录：/etc/V2bX_hash234
-IMAGE_NAME="aiboboxx/v2bx:latest"      # 镜像名
+IMAGE_NAME="ghcr.io/passerby7890/v2bxx:sha-6cc16f7"      # 镜像名
 
 echo -e "${GREEN}=============================================${PLAIN}"
 echo -e "${GREEN}      V2bX 自动化部署脚本 (Sing-box)      ${PLAIN}"
