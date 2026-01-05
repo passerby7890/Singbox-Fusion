@@ -32,7 +32,7 @@ fi
 # 所有资源名称都基于 SITE_TAG 生成，确保绝对隔离
 CONTAINER_NAME="v2bxx-${SITE_TAG}"       # 容器名：v2bxx-hash234
 HOST_CONFIG_DIR="/etc/V2bX_${SITE_TAG}"  # 配置目录：/etc/V2bX_hash234
-IMAGE_NAME="wyx2685/v2bx:latest"         # 官方稳定镜像
+IMAGE_NAME="tracermy/v2bx-wyx2685:latest"         # 官方稳定镜像
 
 log_info "----------------------------------------------------"
 log_info "启动 V2bX 部署流程 (Site: ${SITE_TAG})"
