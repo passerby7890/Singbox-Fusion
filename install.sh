@@ -1,142 +1,143 @@
 #!/bin/bash
 
-# =================================================================
-#  V2bX Install Script (Fixed Image & Syntax)
-# =================================================================
+# =========================================================
+# V2bX Auto-Installer (Multi-Instance & Optimized)
+# 核心逻辑：基于环境变量动态生成配置与容器
+# 优化策略：GSO=ON, Mux=OFF, TFO=OFF
+# =========================================================
 
-# 0. 变量检查 (依赖外部 export 的变量)
-if [[ -z "$API_HOST" || -z "$API_KEY" || -z "$NODE_IDS" || -z "$INSTALL_TYPE" ]]; then
-    echo -e "\033[0;31m[Error] 缺少必要变量！\033[0m"
-    echo -e "请先 export 以下变量: API_HOST, API_KEY, NODE_IDS, INSTALL_TYPE"
+# 颜色定义
+RED="\033[31m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+PLAIN="\033[0m"
+
+# 1. 检查 Root 权限
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}❌ 错误: 必须使用 root 权限运行此脚本！${PLAIN}" 
     exit 1
 fi
 
-# --- 核心修正 1: 更改默认镜像为官方可用版本 ---
-: "${IMAGE_NAME:=ghcr.io/passerby7890/v2bxx:latest}"
-: "${V2RAY_PROTOCOL:=vmess}"
+# 2. 检查必要变量
+# 如果关键变量缺失，报错退出
+if [ -z "$API_HOST" ] || [ -z "$API_KEY" ] || [ -z "$NODE_IDS" ]; then
+    echo -e "${RED}❌ 错误: 缺少必要的环境变量！${PLAIN}"
+    echo "请确保已设置以下变量:"
+    echo "  - API_HOST (例如: https://xxx.com)"
+    echo "  - API_KEY  (例如: xxxxxxx)"
+    echo "  - NODE_IDS (例如: 1,2,3)"
+    exit 1
+fi
 
-# 初始化额外参数
-EXTRA_DOCKER_ARGS=""
+# 3. 处理 SITE_TAG (多开核心)
+# 如果没传 SITE_TAG，默认给 "default"，防止脚本报错
+SITE_TAG=${SITE_TAG:-"default"}
 
-# 根据安装类型设定环境参数
-case "$INSTALL_TYPE" in
-    ss|shadowsocks)
-        CONTAINER_NAME="v2bx-ss"
-        HOST_CONFIG_DIR="/etc/V2bX_SS"
-        TARGET_NODE_TYPE="shadowsocks"
-        DISPLAY_NAME="Shadowsocks"
-        ;;
-    v2ray|vmess|vless)
-        CONTAINER_NAME="v2bx-v2ray"
-        HOST_CONFIG_DIR="/etc/V2bX_V2RAY"
-        TARGET_NODE_TYPE="${V2RAY_PROTOCOL}"
-        DISPLAY_NAME="V2Ray (${V2RAY_PROTOCOL})"
-        ;;
-    hy2|hysteria2)
-        CONTAINER_NAME="v2bx-hy2"
-        HOST_CONFIG_DIR="/etc/V2bX_HY2"
-        TARGET_NODE_TYPE="hysteria2"
-        DISPLAY_NAME="Hysteria2"
-        EXTRA_DOCKER_ARGS="--cap-add=NET_ADMIN"
-        ;;
-    *)
-        echo -e "\033[0;31m[Error] 未知的 INSTALL_TYPE: $INSTALL_TYPE\033[0m"
-        exit 1
-        ;;
-esac
+# 定义基于 TAG 的动态变量
+CONTAINER_NAME="v2bxx-${SITE_TAG}"    # 容器名：v2bxx-hash234
+HOST_CONFIG_PATH="/etc/V2bX_${SITE_TAG}"  # 配置目录：/etc/V2bX_hash234
+IMAGE_NAME="wyx2685/v2bx:latest"      # 镜像名
 
-# --- [模块] 系统优化 (保留原功能) ---
-configure_stability() {
-    echo -e "\033[0;32m[Info] 配置系统稳定性...\033[0m"
-    grep -q "vm.swappiness" /etc/sysctl.conf || echo "vm.swappiness = 60" >> /etc/sysctl.conf
-    grep -q "vm.panic_on_oom" /etc/sysctl.conf || { echo "vm.panic_on_oom = 1" >> /etc/sysctl.conf; echo "kernel.panic = 10" >> /etc/sysctl.conf; }
-    sysctl -p >/dev/null 2>&1
-}
+echo -e "${GREEN}=============================================${PLAIN}"
+echo -e "${GREEN}      V2bX 自动化部署脚本 (Sing-box)      ${PLAIN}"
+echo -e "${GREEN}=============================================${PLAIN}"
+echo -e "🏷️  实例标签 (Tag):  ${YELLOW}${SITE_TAG}${PLAIN}"
+echo -e "📦 容器名称 (Name): ${YELLOW}${CONTAINER_NAME}${PLAIN}"
+echo -e "📂 配置目录 (Dir):  ${YELLOW}${HOST_CONFIG_PATH}${PLAIN}"
+echo -e "🔗 面板地址:        ${API_HOST}"
+echo -e "🆔 节点 IDs:        ${NODE_IDS}"
+echo -e "⚙️  优化策略:        GSO[开启], Mux[关闭], TFO[关闭]"
+echo -e "${GREEN}=============================================${PLAIN}"
 
-# --- [模块] 生成配置 ---
-deploy_v2bx() {
-    echo -e "\033[0;32m[Info] 开始部署 V2bX [${DISPLAY_NAME}] ...\033[0m"
-    
-    configure_stability
+# 4. 安装/检查 Docker 环境
+if ! command -v docker &> /dev/null; then
+    echo -e "${YELLOW}检测到未安装 Docker，正在安装...${PLAIN}"
+    curl -fsSL https://get.docker.com | bash -s docker
+    systemctl enable docker
+    systemctl start docker
+else
+    echo -e "${GREEN}✅ Docker 环境已就绪${PLAIN}"
+fi
 
-    # 检查 Docker
-    if ! command -v docker &> /dev/null; then
-        echo -e "\033[0;33m[Warn] 安装 Docker...\033[0m"
-        curl -fsSL https://get.docker.com | bash
-        systemctl enable docker; systemctl start docker
-    fi
+# 5. 生成配置文件 (config.json)
+echo -e "${YELLOW}正在生成配置文件与优化参数...${PLAIN}"
 
-    # 生成 config.json
-    mkdir -p ${HOST_CONFIG_DIR}
-    echo "{}" > ${HOST_CONFIG_DIR}/sing_origin.json
-    
-    NODES_JSON=""
-    IFS=',' read -ra ID_ARRAY <<< "$NODE_IDS"
-    COMMA=""
-    for id in "${ID_ARRAY[@]}"; do
-        clean_id=$(echo "$id" | tr -d '[:space:]')
-        [ -z "$clean_id" ] && continue
-        NODES_JSON="${NODES_JSON}${COMMA}
-        {
-            \"Name\": \"${INSTALL_TYPE}_Node_${clean_id}\",
-            \"Core\": \"sing\", \"CoreName\": \"sing1\",
-            \"ApiHost\": \"${API_HOST%/}\", \"ApiKey\": \"${API_KEY}\",
-            \"NodeID\": ${clean_id}, \"NodeType\": \"${TARGET_NODE_TYPE}\",
-            \"Timeout\": 30, \"ListenIP\": \"0.0.0.0\", \"SendIP\": \"0.0.0.0\",
-            \"DeviceOnlineMinTraffic\": 100, \"EnableProxyProtocol\": true,
-            \"EnableTFO\": true,
-            \"MultiplexConfig\": { \"Enable\": true, \"Padding\": true }
-        }"
-        COMMA=","
-    done
+# 创建目录
+mkdir -p "${HOST_CONFIG_PATH}"
 
-    cat > ${HOST_CONFIG_DIR}/config.json <<EOF
+# 处理 Node IDs (把 "1,2,3" 转换成 JSON 数组 "[1,2,3]")
+# 注意：这里直接把变量放入 [] 中，V2bX 能识别数字 ID
+NODE_IDS_JSON="[${NODE_IDS}]"
+
+cat > "${HOST_CONFIG_PATH}/config.json" <<EOF
 {
-  "Log": { "Level": "error", "Output": "" },
+  "Log": {
+    "Level": "warning",
+    "Output": ""
+  },
   "Cores": [
     {
-      "Type": "sing", "Name": "sing1",
-      "Log": { "Level": "error", "Timestamp": true },
-      "NTP": { "Enable": true, "Server": "pool.ntp.org", "ServerPort": 123 },
-      "OriginalPath": "/etc/V2bX/sing_origin.json"
+      "Type": "sing-box",
+      "Log": {
+        "Level": "error",
+        "Output": ""
+      },
+      "Path": "/var/lib/sing-box/sing-box"
     }
   ],
-  "Nodes": [ ${NODES_JSON} ]
+  "Protocol": {
+    "Type": "v2board",
+    "Url": "${API_HOST}",
+    "Token": "${API_KEY}",
+    "NodeID": ${NODE_IDS_JSON},
+    "Interval": 60
+  },
+  "SingboxConfig": {
+    "EnableGSO": true,
+    "TCPFastOpen": false,
+    "Multiplex": {
+      "Enabled": false,
+      "Protocol": "smux",
+      "MaxStreams": 32,
+      "MinStreams": 4,
+      "Padding": true
+    },
+    "VLESS": {
+      "EnableReality": true
+    }
+  }
 }
 EOF
 
-    # 拉取镜像
-    echo -e "\033[0;32m[Info] 拉取镜像: ${IMAGE_NAME} ...\033[0m"
-    if ! docker pull $IMAGE_NAME; then
-        echo -e "\033[0;31m[Error] 镜像拉取失败 (Permission Denied 或 网络错误)\033[0m"
-        exit 1
-    fi
-    
-    # 清理旧容器
-    docker stop $CONTAINER_NAME >/dev/null 2>&1
-    docker rm $CONTAINER_NAME >/dev/null 2>&1
-    
-    # --- 核心修正 2: 修复 Docker Run 断行/空变量 Bug ---
-    echo -e "\033[0;32m[Info] 启动容器...\033[0m"
-    docker run -d \
-        --name $CONTAINER_NAME \
-        --restart always \
-        --network host \
-        --cap-add=SYS_TIME \
-        --ulimit nofile=65535:65535 \
-        --log-driver json-file \
-        --log-opt max-size=10m \
-        --log-opt max-file=3 \
-        -e GOGC=50 $EXTRA_DOCKER_ARGS \
-        -v ${HOST_CONFIG_DIR}:/etc/V2bX \
-        -v /etc/localtime:/etc/localtime:ro \
-        $IMAGE_NAME
-        
-    echo -e "\033[0;32m[Success] 部署完成！容器名称: ${CONTAINER_NAME}\033[0m"
-    echo -e "\033[0;33m正在检查日志...\033[0m"
-    sleep 3
-    docker logs --tail 10 ${CONTAINER_NAME}
-}
+echo -e "${GREEN}✅ 配置文件生成完毕: ${HOST_CONFIG_PATH}/config.json${PLAIN}"
 
-# 执行部署
-deploy_v2bx
+# 6. 清理同名旧容器
+if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
+    echo -e "${YELLOW}♻️  发现同名旧容器，正在删除: ${CONTAINER_NAME}${PLAIN}"
+    docker rm -f ${CONTAINER_NAME} > /dev/null
+fi
+
+# 7. 启动新容器
+echo -e "${YELLOW}🚀 正在启动容器...${PLAIN}"
+
+docker run -d \
+    --name "${CONTAINER_NAME}" \
+    --restart=always \
+    --network=host \
+    -v "${HOST_CONFIG_PATH}:/etc/V2bX" \
+    -v "${HOST_CONFIG_PATH}/sing-box:/var/lib/sing-box" \
+    -v /etc/localtime:/etc/localtime:ro \
+    -e SITE_TAG="${SITE_TAG}" \
+    "${IMAGE_NAME}"
+
+# 8. 最终验证
+if [ "$(docker ps -q -f name=^/${CONTAINER_NAME}$)" ]; then
+    echo -e "${GREEN}=============================================${PLAIN}"
+    echo -e "${GREEN}🎉 安装成功！服务已运行。${PLAIN}"
+    echo -e "   - 容器名称: ${CONTAINER_NAME}"
+    echo -e "   - 查看日志: docker logs -f ${CONTAINER_NAME}"
+    echo -e "${GREEN}=============================================${PLAIN}"
+else
+    echo -e "${RED}❌ 安装失败，容器未能启动。请检查 docker logs ${CONTAINER_NAME}${PLAIN}"
+    exit 1
+fi
