@@ -1,147 +1,197 @@
-V2bX 全能部署脚本 (Google SRE Standard)
-这是一个基于 Google SRE 运维标准 编写的高级 V2bX 节点部署脚本。不仅支持 Docker 自动化部署，还深度集成了系统级优化、多实例隔离、资源保护及容错机制。
+# V2bX 全能部署腳本 (Multi-Site Isolation Mode)
 
-✨ 核心特性
-🛡️ 多实例隔离 (Multi-Instance)
-通过 SITE_TAG 完美支持在同一台服务器上运行多个不同面板、不同协议的节点，互不干扰。
+> 一鍵完成 V2bX 節點的 Docker 自動化部署，支援**多站點隔離共存**、系統級網路優化與智能管理。
+> 鏡像源：`tinyserve/v2bx:latest`
 
-🚀 系统自动优化
-自动配置 BBR + FQ 拥塞控制，并强制校准内核参数。
+---
 
-💾 智能内存管理
-Smart Swap：自动检测并创建 Swap 分区（具备防重复创建逻辑）。
-ZRAM 压缩：自动配置内存压缩技术，显著提升小内存 VPS 的高并发性能。
+## ✨ 核心特性
 
-🔧 容错与自愈
-自动检测并修复 dpkg/apt 锁死问题。
-Docker 进程守护与日志自动轮转 (Log Rotation)，防止日志撑爆硬盘。
-启动后自动检测端口冲突并发出警告。
+### 🛡️ 多實例隔離 (Multi-Instance)
 
-🔍 快捷管理
-内置实例查询功能与自动生成系统快捷管理指令。
+透過 `SITE_TAG` 變數實現同一台伺服器上運行多個不同面板、不同協議的節點，**容器、配置目錄、管理指令**完全隔離，互不干擾。
 
-📥 安装与使用
-第一步：下载脚本
-建议先将脚本下载到服务器本地，方便后续管理：
+### 🚀 系統自動優化
 
-bash
+- **BBR + FQ** 擁塞控制自動啟用
+- **GSO / GRO / TSO** 網卡卸載自動開啟
+- 核心參數（`tcp_notsent_lowat`）自動校準
 
-wget -N https://raw.githubusercontent.com/nick0425-ops/Singbox-Fusion/main/install.sh
+### 💾 智能記憶體管理
+
+- **Smart Swap**：自動偵測，無 Swap 時自動建立 2GB Swap（防重複建立）
+- **記憶體參數調優**：`swappiness=10` + `vfs_cache_pressure=50`，小記憶體 VPS 也能穩定高併發
+
+### 🔧 容錯與自癒
+
+- Docker 未安裝時自動呼叫官方腳本安裝
+- 容器設定 `--restart always` 自動守護
+- **Log Rotation**：日誌限制 `10MB × 3` 份，防止撐爆硬碟
+- `ulimit nofile=65535` 防高併發檔案描述符耗盡
+
+### 🔍 快捷管理
+
+安裝完成後自動生成專屬管理指令 `v2bx-{SITE_TAG}`，支援日誌、重啟、停止、更新、卸載等操作。
+
+---
+
+## 📥 安裝與使用
+
+### 第一步：下載腳本
+
+```bash
+wget -N https://raw.githubusercontent.com/passerby7890/Singbox-Fusion/main/install.sh
 chmod +x install.sh
+```
 
-第二步：配置并安装 (多场景示例)
+### 第二步：配置並安裝
 
-场景 1️⃣：安装 Shadowsocks 节点 (Site A)
+> [!IMPORTANT]
+> 安裝前請先 `export` 以下必要變數，腳本會自動檢查。
 
-适用于第一个网站或第一组节点：
+---
 
-bash
-# 1. 定义变量
-export SITE_TAG="siteA"           # [关键] 实例标签，用于隔离容器
+#### 場景 1️⃣：安裝 Shadowsocks 節點 (Site A)
 
+```bash
+# 1. 定義變數
+export SITE_TAG="siteA"           # [關鍵] 實例標籤，用於隔離容器
 export API_HOST="https://a.com"   # 面板地址
+export API_KEY="通訊密鑰A"        # 面板 Key
+export NODE_IDS="1,2"             # 節點 ID（多個用逗號分隔）
+export INSTALL_TYPE="ss"          # 安裝類型
 
-export API_KEY="通信密钥A"         # 面板 Key
-
-export NODE_IDS="1,2"             # 节点 ID
-
-export INSTALL_TYPE="ss"          # 设置类型为 ss
-
-# 2. 运行脚本
+# 2. 運行腳本
 bash install.sh
+```
 
-场景 2️⃣：安装 V2Ray (VMess/VLESS) 节点 (Site B)
+#### 場景 2️⃣：安裝 V2Ray (VMess/VLESS) 節點 (Site B)
 
-适用于第二个网站，与 Site A 完美共存：
-
-bash
-# 1. 定义变量 (注意更换 SITE_TAG)
-export SITE_TAG="siteB"       
-
+```bash
+export SITE_TAG="siteB"
 export API_HOST="https://b.com"
-
-export API_KEY="通信密钥B"
-
+export API_KEY="通訊密鑰B"
 export NODE_IDS="3,4"
+export INSTALL_TYPE="v2ray"
+export V2RAY_PROTOCOL="vmess"     # (可選) vmess 或 vless，預設 vmess
 
-export INSTALL_TYPE="v2ray"      # 设置类型为 v2ray
-
-export V2RAY_PROTOCOL="vmess"    # (可选) vmess 或 vless，默认 vmess
-
-# 2. 运行脚本
 bash install.sh
+```
 
-场景 3️⃣：安装 Hysteria2 节点 (Site C)
-bash
-# 1. 定义变量
+#### 場景 3️⃣：安裝 Hysteria2 節點 (Site C)
+
+```bash
 export SITE_TAG="siteC"
-
 export API_HOST="https://c.com"
-
-export API_KEY="通信密钥C"
-
+export API_KEY="通訊密鑰C"
 export NODE_IDS="5"
+export INSTALL_TYPE="hy2"         # 自動加入 --cap-add=NET_ADMIN
 
-export INSTALL_TYPE="hy2"        # 设置类型为 hy2
-
-# 2. 运行脚本
 bash install.sh
+```
 
-📋 环境变量说明
-变量名称	必填	说明	示例值
-SITE_TAG	✅	实例标签 (多开核心)。用于隔离容器和配置，只允许字母/数字/下划线。	siteA, hk_node
+---
 
-API_HOST	✅	面板网址	https://v2board.com
+## 📋 環境變數說明
 
-API_KEY	✅	通信密钥	mysecretkey
+| 變數名稱 | 必填 | 說明 | 示例值 |
+|---|---|---|---|
+| `SITE_TAG` | ✅ | 實例標籤（多開核心），只允許字母/數字/底線 | `siteA`, `hk_node` |
+| `API_HOST` | ✅ | 面板網址 | `https://v2board.com` |
+| `API_KEY` | ✅ | 通訊密鑰 | `mysecretkey` |
+| `NODE_IDS` | ✅ | 節點 ID，多個用逗號分隔 | `1` 或 `1,2,3` |
+| `INSTALL_TYPE` | ✅ | 安裝類型 | `ss`, `v2ray`, `hy2` |
+| `V2RAY_PROTOCOL` | ❌ | V2Ray 協議（僅 `INSTALL_TYPE=v2ray` 時有效） | `vmess`（預設）, `vless` |
+| `IMAGE_NAME` | ❌ | 自訂 Docker 鏡像 | `tinyserve/v2bx:latest`（預設） |
 
-NODE_IDS	✅	节点 ID (多个 ID 请用逗号分隔)	1 或 1,2,3
+---
 
-INSTALL_TYPE	✅	安装类型	ss, v2ray, hy2
+## 🛠️ 管理與維護
 
-V2RAY_PROTOCOL	❌	V2Ray 协议 (仅在 type=v2ray 时有效)	vmess (默认), vless
+### ⚡ 快捷管理指令
 
-🛠️ 管理与维护
+安裝完成後，系統會自動生成快捷指令，格式為 **`v2bx-{SITE_TAG}`**。
 
-🔍 查询已安装实例 (List Mode)
+假設你的 `SITE_TAG` 為 `siteA`，直接執行：
 
-想知道服务器上装了哪些节点？运行以下指令自动扫描所有由本脚本生成的实例：
+```bash
+v2bx-siteA
+```
 
+即可進入互動式管理面板：
 
-bash
-bash install.sh list
-输出示例：
+```
+================================================
+   V2bX 管理面板 - 站點: siteA
+================================================
+ 容器名稱: v2bx-ss-siteA
+ 配置目錄: /etc/V2bX_ss-siteA
+------------------------------------------------
+ 1. 查看日誌 (Logs)
+ 2. 重啟服務 (Restart)
+ 3. 停止服務 (Stop)
+ 4. 更新鏡像 (Update)
+ 5. 卸載此節點 (Uninstall)
+ 0. 退出
+------------------------------------------------
+```
 
-text
-SITE_TAG    容器名称               运行状态    管理指令
+| 選項 | 動作 | 說明 |
+|---|---|---|
+| 1 | 查看日誌 | 即時查看最近 100 行日誌（`Ctrl+C` 退出） |
+| 2 | 重啟服務 | 重啟該實例的 Docker 容器 |
+| 3 | 停止服務 | 停止該實例 |
+| 4 | 更新鏡像 | 拉取最新鏡像並重新建立容器 |
+| 5 | 卸載節點 | 刪除容器、配置與快捷指令（需二次確認） |
 
-siteA       v2bx-ss-siteA         running    v2bx_siteA
+---
 
-siteB       v2bx-v2ray-siteB      running    v2bx_siteB
+## 🏗️ 部署架構
 
-⚡ 快捷管理指令
+```
+伺服器
+├── /etc/V2bX_ss-siteA/          ← Site A 配置（Shadowsocks）
+│   ├── config.json
+│   └── sing_origin.json
+├── /etc/V2bX_v2ray-siteB/       ← Site B 配置（V2Ray）
+│   ├── config.json
+│   └── sing_origin.json
+├── /etc/V2bX_hy2-siteC/         ← Site C 配置（Hysteria2）
+│   ├── config.json
+│   └── sing_origin.json
+├── /usr/bin/v2bx-siteA          ← Site A 管理指令
+├── /usr/bin/v2bx-siteB          ← Site B 管理指令
+└── /usr/bin/v2bx-siteC          ← Site C 管理指令
+```
 
-安装完成后，系统会自动生成快捷指令，格式为 v2bx_{SITE_TAG}。
+每個實例的 Docker 容器以 `v2bx-{type}-{tag}` 命名（例如 `v2bx-ss-siteA`），配置目錄以 `/etc/V2bX_{type}-{tag}` 隔離，實現完全獨立運行。
 
-假设你的 SITE_TAG 为 siteA：
+---
 
+## ⚠️ 常見問題 (FAQ)
 
-动作	指令	说明
-查看日志	v2bx_siteA logs	查看实时运行日志 (Ctrl+C 退出)
+**Q: 腳本會自動安裝 Docker 嗎？**
 
-重启服务	v2bx_siteA restart	重启该实例的 Docker 容器
+A: 是的。若偵測到系統未安裝 Docker，腳本會自動呼叫官方安裝腳本（`get.docker.com`）並啟用服務。
 
-停止服务	v2bx_siteA stop	停止该实例
+**Q: 支援哪些作業系統？**
 
-强制更新	v2bx_siteA update	拉取最新镜像并重建容器
+A: 支援基於 `apt`（Debian/Ubuntu）和 `yum`（CentOS/RHEL）的 Linux 發行版。
 
-⚠️ 常见问题 (FAQ)
+**Q: 如何在同一台機器上部署多個節點？**
 
-Q: 启动后提示 "[严重警告] 启动失败：检测到端口冲突！" 怎么办？
+A: 只需為每次安裝設定不同的 `SITE_TAG` 即可。容器名稱、配置路徑、管理指令皆會自動隔離。
 
-A: 这意味着你面板上给节点分配的端口已经被本机其他程序（如 Nginx 或其他 V2bX 实例）占用了。请去面板修改节点端口，然后运行 v2bx_{TAG} restart 重启。
+**Q: 日誌太大會不會撐爆硬碟？**
 
+A: 不會。容器已配置 Log Rotation（`max-size=10m`、`max-file=3`），日誌自動輪轉，最大佔用約 30MB。
 
-Q: 脚本会自动安装 Docker 吗？
+**Q: Hysteria2 需要特殊權限嗎？**
 
-A: 是的。如果检测到未安装 Docker，脚本会自动调用官方脚本安装，并尝试修复可能存在的 apt/dpkg 锁死问题。
+A: 腳本已自動處理。當 `INSTALL_TYPE=hy2` 時，會自動加入 `--cap-add=NET_ADMIN` 權限。
+
+---
+
+## 📄 授權
+
+MIT License
