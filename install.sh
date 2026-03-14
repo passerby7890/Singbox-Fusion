@@ -243,13 +243,15 @@ update_container() {
     # 重新運行容器
     docker run -d --name \$NAME --restart always --network host --cap-add=SYS_TIME \\
         --ulimit nofile=65535:65535 --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \\
+        --health-cmd "pgrep -f 'V2bX' || exit 1" --health-interval 30s --health-retries 3 \\
+        --health-start-period 10s --health-timeout 5s \\
         -e GOGC=50 ${EXTRA_DOCKER_ARGS} -v \$DIR:/etc/V2bX -v /etc/localtime:/etc/localtime:ro \$IMG
 
     echo "\$(date +%Y%m%d%H%M%S)" > \${DIR}/.last_update
     echo -e "\${GREEN}[✓] \$NAME 更新完成！\${PLAIN}"
 }
 
-# 快捷參數模式 (支援 v2bx-siteA logs / restart / stop / update)
+# 快捷參數模式 (支援 v2bx-siteA logs / restart / stop / update / health)
 if [ -n "\${1:-}" ]; then
     case "\$1" in
         logs)    docker_op logs ;;
@@ -264,7 +266,13 @@ if [ -n "\${1:-}" ]; then
                 echo -e "\${RED}[✗] \$NAME 未運行\${PLAIN}"
             fi
             ;;
-        *)       echo "用法: ${SHORTCUT_CMD} {logs|restart|stop|start|update|status}" ;;
+        health)
+            HC=\$(docker inspect -f '{{.State.Health.Status}}' \$NAME 2>/dev/null || echo "未配置")
+            echo -e "\${CYAN}[Healthcheck] \$NAME 狀態: \$HC\${PLAIN}"
+            echo -e "\${CYAN}--- 最近檢查記錄 ---\${PLAIN}"
+            docker inspect -f '{{range .State.Health.Log}}{{.End}}: ExitCode={{.ExitCode}} Output={{.Output}}{{end}}' \$NAME 2>/dev/null || echo "無記錄"
+            ;;
+        *)       echo "用法: ${SHORTCUT_CMD} {logs|restart|stop|start|update|status|health}" ;;
     esac
     exit 0
 fi
@@ -285,7 +293,8 @@ echo -e " 3. 停止服務 (Stop)"
 echo -e " 4. 啟動服務 (Start)"
 echo -e " 5. 更新鏡像 (Update)"
 echo -e " 6. 查看狀態 (Status)"
-echo -e " 7. 卸載此節點 (Uninstall)"
+echo -e " 7. 健康檢查 (Health)"
+echo -e " 8. 卸載此節點 (Uninstall)"
 echo -e " 0. 退出"
 echo -e "------------------------------------------------"
 read -p " 請輸入選項: " CHOICE
@@ -305,6 +314,12 @@ case "\$CHOICE" in
        fi
        ;;
     7)
+       HC=\$(docker inspect -f '{{.State.Health.Status}}' \$NAME 2>/dev/null || echo "未配置")
+       echo -e "\${CYAN}[Healthcheck] \$NAME 狀態: \$HC\${PLAIN}"
+       echo -e "\${CYAN}--- 最近檢查記錄 ---\${PLAIN}"
+       docker inspect -f '{{range .State.Health.Log}}{{.End}}: ExitCode={{.ExitCode}} Output={{.Output}}{{end}}' \$NAME 2>/dev/null || echo "無記錄"
+       ;;
+    8)
        read -p "確定刪除此站點節點嗎？(y/n): " C
        if [[ "\$C" == "y" ]]; then
            docker rm -f \$NAME
@@ -336,7 +351,17 @@ health_check() {
         return 1
     fi
 
-    # 2. 端口衝突偵測
+    # 2. Docker Healthcheck 狀態
+    HC_STATUS=$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || echo "none")
+    if [ "$HC_STATUS" == "healthy" ] || [ "$HC_STATUS" == "starting" ]; then
+        log_ok "容器健康狀態: ${HC_STATUS}"
+    elif [ "$HC_STATUS" == "none" ]; then
+        log_warn "容器未配置 HEALTHCHECK"
+    else
+        log_fail "容器健康狀態異常: ${HC_STATUS}"
+    fi
+
+    # 3. 端口衝突偵測
     sleep 3
     log_info "正在偵測端口衝突..."
     CONFLICT=0
@@ -358,6 +383,36 @@ health_check() {
     if [ "$CONFLICT" -eq 0 ]; then
         log_ok "未偵測到端口衝突"
     fi
+}
+
+# =================================================================
+#  [模組] 部署 Autoheal 自動修復容器
+# =================================================================
+deploy_autoheal() {
+    if docker ps -a --format '{{.Names}}' | grep -q '^autoheal$'; then
+        if docker inspect -f '{{.State.Running}}' autoheal 2>/dev/null | grep -q true; then
+            log_ok "Autoheal 容器已運行"
+        else
+            log_warn "Autoheal 容器存在但未運行，正在啟動..."
+            docker start autoheal
+            log_ok "Autoheal 已啟動"
+        fi
+        return
+    fi
+
+    log_info "部署 Autoheal 自動修復容器..."
+    docker run -d \
+        --name autoheal \
+        --restart always \
+        -e AUTOHEAL_CONTAINER_LABEL=all \
+        -e AUTOHEAL_INTERVAL=30 \
+        -e AUTOHEAL_START_PERIOD=60 \
+        --log-driver json-file \
+        --log-opt max-size=5m \
+        --log-opt max-file=2 \
+        -v /var/run/docker.sock:/var/run/docker.sock \
+        willfarrell/autoheal:latest
+    log_ok "Autoheal 已部署，將自動重啟 unhealthy 容器"
 }
 
 # =================================================================
@@ -439,6 +494,11 @@ EOF
         --log-driver json-file \
         --log-opt max-size=10m \
         --log-opt max-file=3 \
+        --health-cmd "pgrep -f 'V2bX' || exit 1" \
+        --health-interval 30s \
+        --health-retries 3 \
+        --health-start-period 10s \
+        --health-timeout 5s \
         -e GOGC=50 \
         $EXTRA_DOCKER_ARGS \
         -v ${HOST_CONFIG_DIR}:/etc/V2bX \
@@ -451,10 +511,13 @@ EOF
     # 6. 安裝快捷管理指令
     install_shortcut
 
-    # 7. 健康檢查 & 端口衝突偵測
+    # 7. 部署 Autoheal 自動修復
+    deploy_autoheal
+
+    # 8. 健康檢查 & 端口衝突偵測
     health_check
 
-    # 8. 完成
+    # 9. 完成
     echo ""
     echo -e "${GREEN}================================================${PLAIN}"
     echo -e "${GREEN}   ✅ 部署成功！${PLAIN}"
@@ -464,6 +527,7 @@ EOF
     echo -e "   ${YELLOW}${SHORTCUT_CMD} logs${PLAIN}     查看日誌"
     echo -e "   ${YELLOW}${SHORTCUT_CMD} restart${PLAIN}  重啟服務"
     echo -e "   ${YELLOW}${SHORTCUT_CMD} status${PLAIN}   查看狀態"
+    echo -e "   ${YELLOW}${SHORTCUT_CMD} health${PLAIN}   健康檢查"
     echo -e "   ${YELLOW}${SHORTCUT_CMD} update${PLAIN}   更新鏡像"
     echo -e "   ${YELLOW}${SHORTCUT_CMD}${PLAIN}          開啟互動面板"
     echo -e "${GREEN}================================================${PLAIN}"
