@@ -1,7 +1,7 @@
 # V2bX 全能部署腳本 (Google SRE Standard)
 
 > 一鍵完成 V2bX 節點的 Docker 自動化部署，支援**多站點隔離共存**、系統級網路優化與智能管理。
-> 鏡像源：`tinyserve/v2bx:latest`
+> 鏡像源：`ghcr.io/shannon-x/v2bx:dev_new`
 
 ---
 
@@ -59,6 +59,7 @@ chmod +x install.sh
 
 > [!IMPORTANT]
 > 安裝前請先 `export` 以下必要變數，腳本會自動檢查格式與完整性。
+> 目前腳本預設鏡像已切換為 `ghcr.io/shannon-x/v2bx:dev_new`，適合直接測試 Shannon-x 的開發版。
 
 ---
 
@@ -123,7 +124,7 @@ bash install.sh
 | `NODE_IDS` | ✅ | 節點 ID，多個用逗號分隔 | `1` 或 `1,2,3` |
 | `INSTALL_TYPE` | ✅ | 安裝類型 | `ss`, `v2ray`, `trojan`, `hy2` |
 | `V2RAY_PROTOCOL` | ❌ | V2Ray 協議（僅 `INSTALL_TYPE=v2ray` 時有效） | `vmess`（預設）, `vless` |
-| `IMAGE_NAME` | ❌ | 自訂 Docker 鏡像 | `tinyserve/v2bx:latest`（預設） |
+| `IMAGE_NAME` | ❌ | 自訂 Docker 鏡像 | `ghcr.io/shannon-x/v2bx:dev_new`（預設） |
 
 ---
 

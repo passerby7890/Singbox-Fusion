@@ -4,7 +4,7 @@
 #   V2bX Multi-Site Deployment Script (Google SRE Standard)
 #   特性：多網站隔離共存、Docker 自動化、Sing-box 核心
 #   功能：BBR / GSO / Swap / ZRAM / 健康檢查 / 端口衝突偵測
-#   鏡像源：tinyserve/v2bx:latest (持續更新版)
+#   鏡像源：ghcr.io/shannon-x/v2bx:dev_new (dev_new 測試版)
 #   版本：v2.0
 # =================================================================
 
@@ -75,7 +75,7 @@ fi
 # =================================================================
 #  1. 定義隔離與核心變數
 # =================================================================
-: "${IMAGE_NAME:=tinyserve/v2bx:latest}"
+: "${IMAGE_NAME:=ghcr.io/shannon-x/v2bx:dev_new}"
 : "${V2RAY_PROTOCOL:=vmess}"
 
 # 根據 SITE_TAG 生成唯一的容器名與路徑
