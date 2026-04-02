@@ -4,7 +4,7 @@
 #   V2bX Multi-Site Deployment Script (Google SRE Standard)
 #   特性：多網站隔離共存、Docker 自動化、Sing-box 核心
 #   功能：BBR / GSO / Swap / ZRAM / 健康檢查 / 端口衝突偵測
-#   鏡像源：ghcr.io/shannon-x/v2bx:dev_new (dev_new 測試版)
+#   鏡像源：tinyserve/v2bx:latest (持續更新版)
 #   版本：v2.0
 # =================================================================
 
@@ -241,7 +241,7 @@ update_container() {
     docker rm \$NAME >/dev/null 2>&1
 
     # 重新運行容器
-    docker run -d --name \$NAME --restart always --network host --cap-add=SYS_TIME \\
+    docker run -d --pull always --name \$NAME --restart always --network host --cap-add=SYS_TIME \\
         --ulimit nofile=65535:65535 --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \\
         --health-cmd "pgrep -f 'V2bX' || exit 1" --health-interval 30s --health-retries 3 \\
         --health-start-period 10s --health-timeout 5s \\
@@ -486,6 +486,7 @@ EOF
     docker rm $CONTAINER_NAME >/dev/null 2>&1 || true
 
     docker run -d \
+        --pull always \
         --name $CONTAINER_NAME \
         --restart always \
         --network host \
