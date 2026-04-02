@@ -117,6 +117,7 @@ esac
 #  [模組] 系統全方位優化 (BBR, GSO, Swap, ZRAM, Docker)
 # =================================================================
 system_optimization() {
+    set +e
     log_info "正在執行系統全方位優化..."
 
     # 1. 安裝基礎工具
@@ -198,6 +199,8 @@ SYSCTL
     else
         log_ok "Docker 已安裝"
     fi
+    log_warn "System optimization ran in best-effort mode; continuing deployment even if some tuning steps failed."
+    set -e
 }
 
 # =================================================================
