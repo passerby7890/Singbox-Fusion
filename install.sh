@@ -75,7 +75,7 @@ fi
 # =================================================================
 #  1. 定義隔離與核心變數
 # =================================================================
-: "${IMAGE_NAME:=ghcr.io/shannon-x/v2bx:dev_new}"
+: "${IMAGE_NAME:=tinyserve/v2bx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}"
 
 # 根據 SITE_TAG 生成唯一的容器名與路徑
@@ -433,6 +433,45 @@ deploy_v2bx() {
 
     # 1. 執行系統優化 (包含 Docker 安裝)
     system_optimization
+
+    # 1.5 NODE_ID 衝突偵測 — 防止多容器重複上報同一節點流量
+    log_info "正在偵測 NODE_ID 衝突..."
+    IFS=',' read -ra _CHECK_IDS <<< "$NODE_IDS"
+    CONFLICT_FOUND=0
+    for _cid in "${_CHECK_IDS[@]}"; do
+        _cid=$(echo "$_cid" | tr -d '[:space:]')
+        [ -z "$_cid" ] && continue
+        # 掃描所有正在運行的 v2bx 容器（排除即將被替換的同名容器）
+        while IFS= read -r _running_name; do
+            [ -z "$_running_name" ] && continue
+            [ "$_running_name" = "$CONTAINER_NAME" ] && continue
+            # 檢查該容器的配置中是否包含相同的 NodeID
+            _cfg_dir="/etc/V2bX_$(echo "$_running_name" | sed 's/^v2bx-//')"
+            if [ -f "${_cfg_dir}/config.json" ]; then
+                if grep -q "\"NodeID\": *${_cid}" "${_cfg_dir}/config.json" 2>/dev/null; then
+                    log_error "[衝突] NODE_ID ${_cid} 已被容器 ${_running_name} 使用！"
+                    log_error "  配置路徑: ${_cfg_dir}/config.json"
+                    log_error "  這將導致流量被重複上報至 v2board，造成流量暴增！"
+                    CONFLICT_FOUND=1
+                fi
+            fi
+        done < <(docker ps --filter "name=v2bx-" --format "{{.Names}}" 2>/dev/null)
+    done
+    if [ "$CONFLICT_FOUND" -eq 1 ]; then
+        echo ""
+        log_error "偵測到 NODE_ID 衝突！請先清理衝突容器再部署。"
+        log_warn  "清理指令: docker rm -f <容器名>"
+        log_warn  "查看所有實例: bash install.sh list"
+        echo ""
+        read -p "是否忽略衝突並繼續部署？(y/N): " _ignore
+        if [[ "$_ignore" != "y" && "$_ignore" != "Y" ]]; then
+            log_error "部署已取消。"
+            exit 1
+        fi
+        log_warn "用戶選擇忽略衝突，繼續部署..."
+    else
+        log_ok "未偵測到 NODE_ID 衝突"
+    fi
 
     # 2. 備份舊配置 (如果存在)
     if [ -d "$HOST_CONFIG_DIR" ]; then
