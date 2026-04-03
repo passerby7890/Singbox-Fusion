@@ -17,6 +17,23 @@ YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 PLAIN='\033[0m'
 
+normalize_api_host() {
+    printf '%s' "${1:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::'
+}
+
+get_config_api_host() {
+    local config_path="$1"
+    local api_host
+    api_host=$(grep -oE '"ApiHost"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_path" 2>/dev/null | head -1 | sed -E 's/^.*"ApiHost"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\1/' || true)
+    printf '%s' "$api_host"
+}
+
+config_uses_node_id() {
+    local config_path="$1"
+    local node_id="$2"
+    grep -Eq "\"NodeID\"[[:space:]]*:[[:space:]]*${node_id}([[:space:]]*[,}])" "$config_path" 2>/dev/null
+}
+
 log_info()  { echo -e "${GREEN}[Info]${PLAIN} $1"; }
 log_warn()  { echo -e "${YELLOW}[Warn]${PLAIN} $1"; }
 log_error() { echo -e "${RED}[Error]${PLAIN} $1"; }
@@ -434,9 +451,12 @@ deploy_v2bx() {
     # 1. 執行系統優化 (包含 Docker 安裝)
     system_optimization
 
-    # 1.5 NODE_ID 衝突偵測 — 防止多容器重複上報同一節點流量
-    log_info "正在偵測 NODE_ID 衝突..."
+    # 1.5 同站點舊實例清理：同 ApiHost + NodeID 視為重建舊實例
+    log_info "正在檢查同站點舊實例..."
+    TARGET_API_HOST="$(normalize_api_host "${API_HOST:-}")"
+    log_info "正在清理同 ApiHost 的舊實例，並準備重建"
     IFS=',' read -ra _CHECK_IDS <<< "$NODE_IDS"
+    REPLACED_OLD=0
     CONFLICT_FOUND=0
     for _cid in "${_CHECK_IDS[@]}"; do
         _cid=$(echo "$_cid" | tr -d '[:space:]')
@@ -448,15 +468,26 @@ deploy_v2bx() {
             # 檢查該容器的配置中是否包含相同的 NodeID
             _cfg_dir="/etc/V2bX_$(echo "$_running_name" | sed 's/^v2bx-//')"
             if [ -f "${_cfg_dir}/config.json" ]; then
-                if grep -q "\"NodeID\": *${_cid}" "${_cfg_dir}/config.json" 2>/dev/null; then
-                    log_error "[衝突] NODE_ID ${_cid} 已被容器 ${_running_name} 使用！"
-                    log_error "  配置路徑: ${_cfg_dir}/config.json"
-                    log_error "  這將導致流量被重複上報至 v2board，造成流量暴增！"
-                    CONFLICT_FOUND=1
+                if config_uses_node_id "${_cfg_dir}/config.json" "${_cid}"; then
+                    _existing_api_host="$(normalize_api_host "$(get_config_api_host "${_cfg_dir}/config.json")")"
+                    if [ -n "$_existing_api_host" ] && [ "$_existing_api_host" != "$TARGET_API_HOST" ]; then
+                        log_info "[忽略] NODE_ID ${_cid} 已存在於 ${_running_name}，但 ApiHost 不同，視為不同站點"
+                        continue
+                    fi
+                    log_warn "[重建] 同 ApiHost 的 NODE_ID ${_cid} 已存在於 ${_running_name}，將刪除舊實例後重建"
+                    docker rm -f "$_running_name" >/dev/null 2>&1 || true
+                    if [[ "$_cfg_dir" == /etc/V2bX_* ]]; then
+                        rm -rf "$_cfg_dir"
+                    fi
+                    REPLACED_OLD=1
+                    break
                 fi
             fi
         done < <(docker ps --filter "name=v2bx-" --format "{{.Names}}" 2>/dev/null)
     done
+    if [ "$REPLACED_OLD" -eq 1 ]; then
+        log_ok "已清理同站點舊實例，繼續重建部署"
+    fi
     if [ "$CONFLICT_FOUND" -eq 1 ]; then
         echo ""
         log_error "偵測到 NODE_ID 衝突！請先清理衝突容器再部署。"
