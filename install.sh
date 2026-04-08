@@ -3,7 +3,7 @@
 # =================================================================
 #   V2bX Multi-Site Deployment Script (Google SRE Standard)
 #   特性：多網站隔離共存、Docker 自動化、Sing-box 核心
-#   功能：BBR / GSO / Swap / ZRAM / 健康檢查 / 端口衝突偵測
+#   功能：BBR / GSO / Swap / ZRAM / 健康檢查 / 端口衝突偵測 / AnyTLS 憑證規範安裝
 #   鏡像源：tinyserve/v2bx:latest (持續更新版)
 #   版本：v2.0
 # =================================================================
@@ -39,6 +39,19 @@ log_warn()  { echo -e "${YELLOW}[Warn]${PLAIN} $1"; }
 log_error() { echo -e "${RED}[Error]${PLAIN} $1"; }
 log_ok()    { echo -e "${GREEN}[✓]${PLAIN} $1"; }
 log_fail()  { echo -e "${RED}[✗]${PLAIN} $1"; }
+
+json_escape() {
+    printf '%s' "${1:-}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+port_in_use() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn "( sport = :${port} )" 2>/dev/null | tail -n +2 | grep -q .
+    else
+        netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"
+    fi
+}
 
 # =================================================================
 #  List 模式：查詢所有已安裝的 V2bX 實例
@@ -79,7 +92,7 @@ if [[ -z "${API_HOST:-}" || -z "${API_KEY:-}" || -z "${NODE_IDS:-}" || -z "${INS
     echo -e "  - ${CYAN}API_HOST${PLAIN}     (面板地址)"
     echo -e "  - ${CYAN}API_KEY${PLAIN}      (通訊密鑰)"
     echo -e "  - ${CYAN}NODE_IDS${PLAIN}     (節點 ID，多個用逗號分隔)"
-    echo -e "  - ${CYAN}INSTALL_TYPE${PLAIN} (ss / v2ray / trojan / hy2)"
+    echo -e "  - ${CYAN}INSTALL_TYPE${PLAIN} (ss / v2ray / trojan / hy2 / anytls)"
     exit 1
 fi
 
@@ -94,6 +107,11 @@ fi
 # =================================================================
 : "${IMAGE_NAME:=tinyserve/v2bx:latest}"
 : "${V2RAY_PROTOCOL:=vmess}"
+: "${ANYTLS_CERT_MODE:=http}"
+: "${ANYTLS_CERT_DOMAIN:=}"
+: "${ANYTLS_CERT_EMAIL:=}"
+: "${ANYTLS_CERT_FILE:=}"
+: "${ANYTLS_KEY_FILE:=}"
 
 # 根據 SITE_TAG 生成唯一的容器名與路徑
 UNIQUE_ID="${INSTALL_TYPE}-${SITE_TAG}"
@@ -118,6 +136,10 @@ case "$INSTALL_TYPE" in
         TARGET_NODE_TYPE="trojan"
         DISPLAY_NAME="Trojan [${SITE_TAG}]"
         ;;
+    anytls)
+        TARGET_NODE_TYPE="anytls"
+        DISPLAY_NAME="AnyTLS [${SITE_TAG}]"
+        ;;
     hy2|hysteria2)
         TARGET_NODE_TYPE="hysteria2"
         DISPLAY_NAME="Hysteria2 [${SITE_TAG}]"
@@ -125,10 +147,70 @@ case "$INSTALL_TYPE" in
         ;;
     *)
         log_error "未知的 INSTALL_TYPE: $INSTALL_TYPE"
-        echo -e "支援的類型: ${CYAN}ss${PLAIN}, ${CYAN}v2ray${PLAIN}, ${CYAN}trojan${PLAIN}, ${CYAN}hy2${PLAIN}"
+        echo -e "支援的類型: ${CYAN}ss${PLAIN}, ${CYAN}v2ray${PLAIN}, ${CYAN}trojan${PLAIN}, ${CYAN}hy2${PLAIN}, ${CYAN}anytls${PLAIN}"
         exit 1
         ;;
 esac
+
+prepare_anytls_cert_config() {
+    ANYTLS_CERT_MODE="$(printf '%s' "${ANYTLS_CERT_MODE:-http}" | tr '[:upper:]' '[:lower:]')"
+
+    case "$ANYTLS_CERT_MODE" in
+        http)
+            if [[ -z "$ANYTLS_CERT_DOMAIN" || -z "$ANYTLS_CERT_EMAIL" ]]; then
+                log_error "AnyTLS 使用 HTTP 憑證模式時，必須設定 ANYTLS_CERT_DOMAIN 與 ANYTLS_CERT_EMAIL"
+                exit 1
+            fi
+            if port_in_use 80; then
+                log_error "AnyTLS 的 HTTP-01 驗證需要本機 80 端口可用，但目前 80 已被占用"
+                echo -e "請改用 ${CYAN}ANYTLS_CERT_MODE=file${PLAIN} 或 ${CYAN}ANYTLS_CERT_MODE=self${PLAIN}，或釋放 80 端口後重試"
+                exit 1
+            fi
+            ;;
+        self)
+            if [[ -z "$ANYTLS_CERT_DOMAIN" ]]; then
+                log_error "AnyTLS 使用 self 憑證模式時，必須設定 ANYTLS_CERT_DOMAIN"
+                exit 1
+            fi
+            ;;
+        file)
+            if [[ -z "$ANYTLS_CERT_FILE" || -z "$ANYTLS_KEY_FILE" ]]; then
+                log_error "AnyTLS 使用 file 憑證模式時，必須設定 ANYTLS_CERT_FILE 與 ANYTLS_KEY_FILE"
+                exit 1
+            fi
+            if [[ ! -f "$ANYTLS_CERT_FILE" || ! -f "$ANYTLS_KEY_FILE" ]]; then
+                log_error "找不到 AnyTLS 憑證檔或私鑰檔"
+                echo -e "  Cert: ${ANYTLS_CERT_FILE}"
+                echo -e "  Key : ${ANYTLS_KEY_FILE}"
+                exit 1
+            fi
+            cp "$ANYTLS_CERT_FILE" "${HOST_CONFIG_DIR}/fullchain.cer"
+            cp "$ANYTLS_KEY_FILE" "${HOST_CONFIG_DIR}/cert.key"
+            chmod 644 "${HOST_CONFIG_DIR}/fullchain.cer"
+            chmod 600 "${HOST_CONFIG_DIR}/cert.key"
+            ;;
+        *)
+            log_error "不支援的 AnyTLS 憑證模式: ${ANYTLS_CERT_MODE}"
+            echo -e "支援的模式: ${CYAN}http${PLAIN}, ${CYAN}file${PLAIN}, ${CYAN}self${PLAIN}"
+            exit 1
+            ;;
+    esac
+
+    local cert_domain_escaped cert_email_escaped
+    cert_domain_escaped="$(json_escape "$ANYTLS_CERT_DOMAIN")"
+    cert_email_escaped="$(json_escape "$ANYTLS_CERT_EMAIL")"
+    ANYTLS_NODE_EXTRA_JSON=$(cat <<EOF
+,
+            "CertConfig": {
+                "CertMode": "${ANYTLS_CERT_MODE}",
+                "CertDomain": "${cert_domain_escaped}",
+                "CertFile": "/etc/V2bX/fullchain.cer",
+                "KeyFile": "/etc/V2bX/cert.key",
+                "Email": "${cert_email_escaped}"
+            }
+EOF
+)
+}
 
 # =================================================================
 #  [模組] 系統全方位優化 (BBR, GSO, Swap, ZRAM, Docker)
@@ -515,6 +597,15 @@ deploy_v2bx() {
     mkdir -p ${HOST_CONFIG_DIR}
     echo "{}" > ${HOST_CONFIG_DIR}/sing_origin.json
 
+    ANYTLS_NODE_EXTRA_JSON=""
+    if [ "$TARGET_NODE_TYPE" = "anytls" ]; then
+        prepare_anytls_cert_config
+        log_info "AnyTLS 憑證模式: ${ANYTLS_CERT_MODE}"
+        if [ -n "${ANYTLS_CERT_DOMAIN}" ]; then
+            log_info "AnyTLS 憑證域名: ${ANYTLS_CERT_DOMAIN}"
+        fi
+    fi
+
     NODES_JSON=""
     IFS=',' read -ra ID_ARRAY <<< "$NODE_IDS"
     COMMA=""
@@ -530,7 +621,7 @@ deploy_v2bx() {
             \"Timeout\": 30, \"ListenIP\": \"0.0.0.0\", \"SendIP\": \"0.0.0.0\",
             \"DeviceOnlineMinTraffic\": 100, \"EnableProxyProtocol\": true,
             \"EnableTFO\": true,
-            \"MultiplexConfig\": { \"Enable\": true, \"Padding\": true }
+            \"MultiplexConfig\": { \"Enable\": true, \"Padding\": true }${ANYTLS_NODE_EXTRA_JSON}
         }"
         COMMA=","
     done
@@ -604,6 +695,19 @@ EOF
     echo -e "   ${YELLOW}${SHORTCUT_CMD} health${PLAIN}   健康檢查"
     echo -e "   ${YELLOW}${SHORTCUT_CMD} update${PLAIN}   更新鏡像"
     echo -e "   ${YELLOW}${SHORTCUT_CMD}${PLAIN}          開啟互動面板"
+    if [ "$TARGET_NODE_TYPE" = "anytls" ]; then
+        echo ""
+        echo -e "${CYAN}AnyTLS 安裝備註:${PLAIN}"
+        echo -e "  - 憑證模式: ${ANYTLS_CERT_MODE}"
+        if [ -n "${ANYTLS_CERT_DOMAIN}" ]; then
+            echo -e "  - 憑證域名: ${ANYTLS_CERT_DOMAIN}"
+        fi
+        if [ "$ANYTLS_CERT_MODE" = "self" ]; then
+            echo -e "  - 這是自簽憑證，面板/客戶端請開啟「允許不安全 / skip-cert-verify」"
+        else
+            echo -e "  - 建議面板保持「允許不安全 = 否」"
+        fi
+    fi
     echo -e "${GREEN}================================================${PLAIN}"
     echo ""
     echo -e "最近日誌："

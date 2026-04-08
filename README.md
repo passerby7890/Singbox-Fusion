@@ -31,6 +31,7 @@
 - **Log Rotation**：日誌限制 `10MB × 3` 份，防止撐爆硬碟
 - `ulimit nofile=65535` 防高併發檔案描述符耗盡
 - **SITE_TAG 格式驗證**，防止非法字元導致異常
+- **AnyTLS 憑證模式標準化**：內建 `http / file / self` 三種規律安裝模式
 
 ### 🔍 智能健康檢查
 
@@ -59,6 +60,7 @@ chmod +x install.sh
 
 > [!IMPORTANT]
 > 安裝前請先 `export` 以下必要變數，腳本會自動檢查格式與完整性。
+> `INSTALL_TYPE=anytls` 時，還需要依憑證模式補齊 `ANYTLS_CERT_*` 參數。
 
 ---
 
@@ -111,6 +113,55 @@ export INSTALL_TYPE="hy2"         # 自動加入 --cap-add=NET_ADMIN
 bash install.sh
 ```
 
+#### 場景 5️⃣：安裝 AnyTLS 節點（推薦：HTTP 自動簽證）
+
+```bash
+export SITE_TAG="siteE"
+export API_HOST="https://panel.example.com"
+export API_KEY="通訊密鑰E"
+export NODE_IDS="7"
+export INSTALL_TYPE="anytls"
+
+# AnyTLS 憑證模式：http / file / self
+export ANYTLS_CERT_MODE="http"
+export ANYTLS_CERT_DOMAIN="edge.example.com"
+export ANYTLS_CERT_EMAIL="admin@example.com"
+
+bash install.sh
+```
+
+#### 場景 6️⃣：AnyTLS 使用既有證書（file 模式）
+
+```bash
+export SITE_TAG="siteF"
+export API_HOST="https://panel.example.com"
+export API_KEY="通訊密鑰F"
+export NODE_IDS="8"
+export INSTALL_TYPE="anytls"
+
+export ANYTLS_CERT_MODE="file"
+export ANYTLS_CERT_DOMAIN="edge.example.com"
+export ANYTLS_CERT_FILE="/root/certs/edge.example.com/fullchain.cer"
+export ANYTLS_KEY_FILE="/root/certs/edge.example.com/cert.key"
+
+bash install.sh
+```
+
+#### 場景 7️⃣：AnyTLS 測試環境自簽證書（self 模式）
+
+```bash
+export SITE_TAG="siteG"
+export API_HOST="https://panel.example.com"
+export API_KEY="通訊密鑰G"
+export NODE_IDS="9"
+export INSTALL_TYPE="anytls"
+
+export ANYTLS_CERT_MODE="self"
+export ANYTLS_CERT_DOMAIN="lab.example.com"
+
+bash install.sh
+```
+
 ---
 
 ## 📋 環境變數說明
@@ -121,9 +172,142 @@ bash install.sh
 | `API_HOST` | ✅ | 面板網址 | `https://v2board.com` |
 | `API_KEY` | ✅ | 通訊密鑰 | `mysecretkey` |
 | `NODE_IDS` | ✅ | 節點 ID，多個用逗號分隔 | `1` 或 `1,2,3` |
-| `INSTALL_TYPE` | ✅ | 安裝類型 | `ss`, `v2ray`, `trojan`, `hy2` |
+| `INSTALL_TYPE` | ✅ | 安裝類型 | `ss`, `v2ray`, `trojan`, `hy2`, `anytls` |
 | `V2RAY_PROTOCOL` | ❌ | V2Ray 協議（僅 `INSTALL_TYPE=v2ray` 時有效） | `vmess`（預設）, `vless` |
 | `IMAGE_NAME` | ❌ | 自訂 Docker 鏡像 | `tinyserve/v2bx:latest`（預設） |
+
+### AnyTLS 專用變數
+
+| 變數名稱 | 必填 | 說明 | 示例值 |
+|---|---|---|---|
+| `ANYTLS_CERT_MODE` | `INSTALL_TYPE=anytls` 時必填 | 憑證模式 | `http`, `file`, `self` |
+| `ANYTLS_CERT_DOMAIN` | `http/self` 必填 | 憑證網域，必須解析到落地機 | `edge.example.com` |
+| `ANYTLS_CERT_EMAIL` | `http` 必填 | Let's Encrypt 註冊 Email | `admin@example.com` |
+| `ANYTLS_CERT_FILE` | `file` 必填 | 既有完整憑證鏈檔案（來源路徑） | `/root/certs/fullchain.cer` |
+| `ANYTLS_KEY_FILE` | `file` 必填 | 既有私鑰檔案（來源路徑） | `/root/certs/cert.key` |
+
+### AnyTLS 規律安裝原則
+
+1. `AnyTLS` 一定要有 TLS 憑證，不能沿用「沒有 CertConfig 也能跑」的心態。
+2. `http` 模式最省事，但要求落地機的 `80` 端口可用，且 `ANYTLS_CERT_DOMAIN` 已經解析到該落地機。
+3. `file` 模式適合已有正式證書的環境；腳本會把來源證書複製到實例配置目錄，容器內統一使用 `/etc/V2bX/fullchain.cer` 與 `/etc/V2bX/cert.key`。
+4. `self` 模式只適合測試。面板或客戶端必須開啟「允許不安全 / skip-cert-verify」。
+5. 面板的 `host / server_name(sni)` 應與 `ANYTLS_CERT_DOMAIN` 保持一致，避免握手成功但驗證失敗。
+6. 若面板的 `連接端口(port)` 與 `服務端口(server_port)` 不同，請自行補一層 TCP 轉發或 Stream 代理，例如 `443 -> 7443`。
+
+### AnyTLS 非對稱端口場景
+
+若你的面板設定如下：
+
+- `port = 443`
+- `server_port = 7443`
+
+代表：
+
+- 客戶端會連 `443`
+- V2bX 實際在落地機上監聽 `7443`
+
+這種情況下，除了 `install.sh` 部署的 V2bX 之外，你還需要在作業系統層補一層 TCP 轉發，例如：
+
+```bash
+apt-get update -y
+apt-get install -y socat
+
+cat > /etc/systemd/system/anytls-443-forward.service <<'EOF'
+[Unit]
+Description=AnyTLS TCP forward 443 to 7443
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:443,reuseaddr,fork TCP:127.0.0.1:7443
+Restart=always
+RestartSec=2
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now anytls-443-forward.service
+```
+
+驗證：
+
+```bash
+ss -tulpn | grep -E ':443 |:7443 '
+openssl s_client -connect 127.0.0.1:7443 -servername edge.example.com -brief </dev/null
+```
+
+### AnyTLS 面板對齊清單
+
+當你在 V2Board / XBoard / 其他相容面板建立 `AnyTLS` 節點時，請至少確認以下欄位一致：
+
+| 面板欄位 | 建議值 / 規律 |
+|---|---|
+| `節點地址(host)` | 對外入口域名，例如 `edge.example.com` |
+| `連接端口(port)` | 客戶端連線端口，通常為 `443` |
+| `服務端口(server_port)` | 落地機實際監聽端口，通常也為 `443` |
+| `SNI / server_name` | 與憑證網域完全一致，例如 `edge.example.com` |
+| `允許不安全` | 正式環境建議 `否`；只有 `self` 模式才建議開 `是` |
+| `padding_scheme` | 可留空，除非你明確知道客戶端也支援同一組 padding 策略 |
+
+### AnyTLS 客戶端對齊清單
+
+1. 客戶端的 `server` 必須指向與面板相同的入口域名。
+2. 客戶端的 `password` 就是使用者 UUID。
+3. `server_name / sni` 應與證書網域一致。
+4. 正式證書請保持 `skip-cert-verify=false`。
+5. 自簽證書測試時，請顯式開啟 `skip-cert-verify=true`。
+6. `AnyTLS` 是代理入口，不是網站，直接用瀏覽器打開看到空回應或連線關閉不代表節點異常。
+
+### AnyTLS 安裝前檢查
+
+```bash
+# 1. 域名必須先解析到落地機
+dig +short edge.example.com
+
+# 2. http 模式下，80 端口必須可用
+ss -tulpn | grep ':80 '
+
+# 3. file 模式下，證書檔必須存在
+ls -l /root/certs/fullchain.cer /root/certs/cert.key
+```
+
+### AnyTLS 安裝後驗證
+
+```bash
+# 看容器是否正常
+v2bx-siteE status
+
+# 看最新日誌
+v2bx-siteE logs
+
+# 驗證 TLS 是否已經起來
+openssl s_client -connect 127.0.0.1:443 -servername edge.example.com -brief </dev/null
+```
+
+若最後一條 `openssl s_client` 還不能完成握手，先不要測客戶端。
+
+### AnyTLS Failure Signatures
+
+| 日誌 / 現象 | 常見原因 | 建議處理 |
+|---|---|---|
+| `unknown user password: fallback disabled` | 最常見是服務端 TLS 沒起來，TLS ClientHello 被當成密碼解析 | 先檢查 `CertConfig`、證書檔、`openssl s_client` |
+| `TLS handshake: EOF` | 探測器、掃描器，或客戶端握手被中途關閉 | 若偶發可忽略，若持續出現在自己測試時再查證書/SNI |
+| `curl https://域名` 空回應 | 你打到的是代理入口，不是 Web 站 | 這通常不算故障 |
+| `http` 模式簽證失敗 | 80 端口被占用，或 DNS 尚未生效 | 釋放 80 / 等待 DNS / 改 `file` 模式 |
+
+### AnyTLS Quick Notes (EN)
+
+- `AnyTLS` requires a valid TLS certificate on the server side.
+- For production, use `ANYTLS_CERT_MODE=http` or `ANYTLS_CERT_MODE=file`.
+- Keep panel `host`, `server_name`, and certificate domain identical.
+- User password is the user UUID.
+- If you see `unknown user password: fallback disabled`, check TLS first, not UUID first.
+- A direct browser request to the AnyTLS endpoint is not a valid health check.
 
 ---
 
@@ -208,6 +392,17 @@ v2bx-siteA
 
 每個實例的 Docker 容器以 `v2bx-{type}-{tag}` 命名，配置目錄以 `/etc/V2bX_{type}-{tag}` 隔離，實現完全獨立運行。
 
+### AnyTLS 生成後的標準結構
+
+```text
+/etc/V2bX_anytls-siteE/
+├── config.json
+├── sing_origin.json
+├── fullchain.cer   # http/file/self 最終都落在這裡
+├── cert.key
+└── .last_update
+```
+
 ---
 
 ## ⚠️ 常見問題 (FAQ)
@@ -223,6 +418,19 @@ A: 為每次安裝設定不同的 `SITE_TAG`，容器、配置、管理指令皆
 
 **Q: 部署後提示端口衝突怎麼辦？**
 A: 表示面板分配的端口已被其他程式佔用。去面板修改節點端口，然後 `v2bx-{TAG} restart`。
+
+**Q: AnyTLS 為什麼日誌一直出現 `unknown user password: fallback disabled`？**
+A: 最常見原因不是 UUID 錯，而是服務端沒有正確啟用 TLS。請先確認：
+1. `INSTALL_TYPE=anytls`
+2. `config.json` 內已有 `CertConfig`
+3. `fullchain.cer` / `cert.key` 已生成
+4. `openssl s_client -connect 127.0.0.1:443 -servername <你的域名>` 能完成握手
+
+**Q: AnyTLS 的 `http` 模式為什麼安裝前會檢查 80 端口？**
+A: 因為 V2bX 的 HTTP-01 簽證需要在本機直接監聽 `80`。若 80 已被 Nginx / Baota / Caddy 佔用，請改用 `file` 或 `self` 模式，或先釋放 80。
+
+**Q: AnyTLS 節點可以直接拿瀏覽器打開嗎？**
+A: 不建議。它是代理入口，不是網站。現在腳本只保證 TLS 憑證與 AnyTLS 握手正確，不保證回 HTTP 內容。
 
 **Q: 更新時配置會遺失嗎？**
 A: 不會。更新前會自動備份至 `/etc/V2bX_{type}-{tag}.bak.{timestamp}`。
