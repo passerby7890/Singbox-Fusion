@@ -64,7 +64,7 @@ chmod +x install.sh
 
 ---
 
-#### 場景 1️⃣：安裝 Shadowsocks 節點
+#### 場景 1️⃣：安裝 Shadowsocks / SS2022 節點
 
 ```bash
 export SITE_TAG="siteA"           # [關鍵] 實例標籤，只允許字母/數字/底線
@@ -175,6 +175,78 @@ bash install.sh
 | `INSTALL_TYPE` | ✅ | 安裝類型 | `ss`, `v2ray`, `trojan`, `hy2`, `anytls` |
 | `V2RAY_PROTOCOL` | ❌ | V2Ray 協議（僅 `INSTALL_TYPE=v2ray` 時有效） | `vmess`（預設）, `vless` |
 | `IMAGE_NAME` | ❌ | 自訂 Docker 鏡像 | `tinyserve/v2bx:latest`（預設） |
+
+### Shadowsocks / SS2022 規律安裝原則
+
+1. `INSTALL_TYPE=ss` 只負責落地安裝 V2bX 與 sing-core，不會替你決定 cipher；實際 cipher 由面板節點設定決定。
+2. 若面板使用 `SS2022`，建議優先選擇：
+   - `2022-blake3-aes-128-gcm`
+   - `2022-blake3-aes-256-gcm`
+   - `2022-blake3-chacha20-poly1305`
+3. `SS/SS2022` 本身不是 TLS 協議，不需要像 `AnyTLS` 那樣額外配置證書。
+4. 若你的需求是「更像 HTTPS / 更接近 TLS 外觀」，應考慮 `AnyTLS`，而不是期待 `SS` 自帶站點外觀。
+5. `SS2022` 與傳統 AEAD Shadowsocks 的密碼規則不同，面板與客戶端要保持一致。
+
+### Shadowsocks 面板對齊清單
+
+| 面板欄位 | 建議值 / 規律 |
+|---|---|
+| `節點地址(host)` | 指向落地機域名或 IP |
+| `連接端口(port)` | 與服務端實際監聽端口一致 |
+| `服務端口(server_port)` | 建議與 `port` 相同 |
+| `cipher` | 與客戶端完全一致 |
+| `server_key` | 僅 `SS2022` 需要，且必須正確 |
+| `允許不安全` | 對 `SS` 無意義，通常不涉及 |
+
+### Shadowsocks 客戶端對齊清單
+
+1. 客戶端 `cipher` 必須與面板節點相同。
+2. 傳統 AEAD Shadowsocks 使用使用者密碼；`SS2022` 需要正確的 `server_key + user password/uuid` 組合。
+3. 若是 `SS2022`，不要把舊版 Shadowsocks 客戶端配置直接套用。
+4. 若你需要的是穩定與簡單，`SS2022` 是最適合的主力節點。
+5. 若你需要更強偽裝，再考慮 `AnyTLS`。
+
+### Shadowsocks 安裝前檢查
+
+```bash
+# 確認面板節點已建立，且 node_id 正確
+echo "$NODE_IDS"
+
+# 確認落地機目標端口沒有被其他服務占用
+ss -tulpn | grep -E ':443 |:8443 |:2053 ' || true
+```
+
+### Shadowsocks 安裝後驗證
+
+```bash
+# 看容器狀態
+v2bx-siteA status
+
+# 看健康檢查
+v2bx-siteA health
+
+# 看最新日誌
+v2bx-siteA logs
+```
+
+若是 `SS2022`，最可靠的驗證方式仍然是用實際客戶端連線測試，而不是直接用瀏覽器打端口。
+
+### Shadowsocks Failure Signatures
+
+| 日誌 / 現象 | 常見原因 | 建議處理 |
+|---|---|---|
+| 客戶端握手失敗 | `cipher` 不一致 | 面板與客戶端改成完全相同 |
+| `SS2022` 無法連線 | `server_key` 或 UUID / password 規則不一致 | 重新核對面板與客戶端參數 |
+| 端口通但代理不可用 | 節點 ID 對錯機器、落地端口被別的服務占用 | 重新對照 `host / NodeID / port` |
+| 想要 HTTPS 外觀但實測不像 | 協議本身是 `SS`，不是 TLS | 改走 `AnyTLS` |
+
+### Shadowsocks Quick Notes (EN)
+
+- `INSTALL_TYPE=ss` deploys a Shadowsocks-capable V2bX node.
+- Cipher selection is controlled by the panel, not by the installer.
+- `SS2022` needs the correct server-side keying model.
+- Shadowsocks is not a website and not a TLS site by itself.
+- If you need stronger TLS-style camouflage, use `AnyTLS`.
 
 ### AnyTLS 專用變數
 
@@ -419,6 +491,12 @@ A: 為每次安裝設定不同的 `SITE_TAG`，容器、配置、管理指令皆
 **Q: 部署後提示端口衝突怎麼辦？**
 A: 表示面板分配的端口已被其他程式佔用。去面板修改節點端口，然後 `v2bx-{TAG} restart`。
 
+**Q: Shadowsocks / SS2022 需要證書嗎？**
+A: 不需要。`SS/SS2022` 不是 TLS 協議，本身不依賴證書。若你要的是 TLS 外觀或 HTTPS 風格偽裝，請改用 `AnyTLS`。
+
+**Q: SS2022 和舊版 Shadowsocks 最大差異是什麼？**
+A: 最大差異是密鑰模型與客戶端相容性。`SS2022` 必須確保面板、落地機、客戶端三邊都使用相同的 `2022-blake3-*` cipher，並正確處理 `server_key` 與使用者密碼/UUID。
+
 **Q: AnyTLS 為什麼日誌一直出現 `unknown user password: fallback disabled`？**
 A: 最常見原因不是 UUID 錯，而是服務端沒有正確啟用 TLS。請先確認：
 1. `INSTALL_TYPE=anytls`
@@ -440,6 +518,53 @@ A: 當伺服器記憶體 ≤ 2GB 且系統支援 ZRAM 模組時自動啟用，�
 
 **Q: 日誌太大會不會撐爆硬碟？**
 A: 不會。已配置 Log Rotation（`max-size=10m`、`max-file=3`），最大佔用約 30MB。
+
+---
+
+## 🔐 上傳前檢查
+
+### 不應該上傳到 GitHub 的內容
+
+以下資料屬於運維私密資料或運行時產物，請不要提交：
+
+- 真實面板網址、真實 `API_KEY`、真實節點 ID 對照表
+- 真實使用者 UUID 匯出、訂閱內容、測試客戶端配置
+- 真實 TLS 憑證與私鑰：`fullchain.cer`、`cert.key`、`*.pem`、`*.key`
+- `/etc/V2bX_*` 下的實際 `config.json`、`sing_origin.json`、`.last_update`
+- ACME / Lego 帳號資料，例如 `user/user-*.json`
+- 排障時產生的備份、壓縮包、日誌、Docker inspect 輸出
+- 真實域名、真實 IP、真實 root 密碼、資料庫帳密
+
+### 建議只上傳的內容
+
+- `install.sh`
+- `README.md`
+- `.gitignore`
+- 純樣板或純示例檔，不包含任何真實密鑰與真實主機資訊
+
+### 這份倉庫目前狀態
+
+目前我替你整理好的可上傳目錄只有：
+
+- `install.sh`
+- `README.md`
+- `.gitignore`
+
+而且我已經檢查過，這份目錄內沒有你這次排障時使用的真實：
+
+- 面板 API Key
+- SSH 密碼
+- MySQL 密碼
+- 落地機 IP
+- 真實節點域名
+
+### 上傳前最後再檢查一次
+
+```bash
+rg -n -i "token|apikey|api_key|password|passwd|secret|fullchain|cert.key|private key|public key" .
+```
+
+若有命中，先確認是不是示例字串；若是真實值，先替換成 `example.com`、`your-api-key`、`admin@example.com` 這類佔位字串。
 
 ---
 
